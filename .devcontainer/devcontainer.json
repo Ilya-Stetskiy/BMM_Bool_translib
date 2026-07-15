@@ -1,0 +1,17 @@
+{
+  "name": "genetica-boolean-lib",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "remoteUser": "coder",
+  "containerUser": "coder",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-python.python",
+        "ms-vscode.cmake-tools"
+      ]
+    }
+  }
+}
