@@ -36,7 +36,12 @@ if(NOT EXISTS "${MOCKTURTLE_ROOT}/include")
                      "(нет include/) — переопределите -DMOCKTURTLE_ROOT=... , если "
                      "используете другой .devcontainer-образ.")
 endif()
-file(GLOB MOCKTURTLE_LIB_INCLUDES "${MOCKTURTLE_ROOT}/lib/*/include")
+file(GLOB MOCKTURTLE_LIB_CANDIDATES "${MOCKTURTLE_ROOT}/lib/*")
+foreach(item ${MOCKTURTLE_LIB_CANDIDATES})
+    if(IS_DIRECTORY ${item})
+        list(APPEND MOCKTURTLE_LIB_INCLUDES ${item})
+    endif()
+endforeach()
 
 # ---------------------------------------------------------------------------
 # Sylvan — ставится через `make install && ldconfig` (см. Dockerfile).
@@ -120,7 +125,7 @@ endif()
 # в самом Dockerfile рядом со сборкой OR-Tools).
 # ---------------------------------------------------------------------------
 
-# find_package(ortools CONFIG REQUIRED)
+find_package(ortools CONFIG REQUIRED)
 
 # ---------------------------------------------------------------------------
 # OpenMP (thr/*, *_to_tt/tt_to_*) — часть build-essential/gcc (libgomp),
