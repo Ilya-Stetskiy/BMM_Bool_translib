@@ -11,18 +11,27 @@
 
 namespace bmm {
 
+// --- ХЕЛПЕРЫ ДЛЯ РАБОТЫ С СЫРЫМ SYLVAN API ---
+// ИСПРАВЛЕНИЕ 1: sylvan_complement находится в namespace sylvan::
+inline bool sylvan_is_comp(const sylvan::Bdd& n) {
+    return (n.GetBDD() & sylvan::sylvan_complement) != 0;
+}
+
+inline sylvan::Bdd sylvan_regular(const sylvan::Bdd& n) {
+    return sylvan_is_comp(n) ? !n : n;
+}
+
 Result<Aig> bdd_to_aig(const Bdd& f) {
-    // ВАЖНО: Макрос профилировщика должен быть первой строкой в scope!
-    // Он замерит время выполнения всей функции вплоть до её возврата.
     ZoneScoped;
 
-    // КОНТРАКТ 2а: Graceful degradation. Перехват комбинаторного взрыва памяти.
     try {
         mockturtle::aig_network aig;
         
-        // КОНТРАКТ 1: Надежная проверка терминала. 
-        if (f.isTerminal()) {
-            bool val = !f.isComp();
+        // ИСПРАВЛЕНИЕ 2: используем публичный геттер raw() из common.hpp
+        sylvan::Bdd f_syl = f.raw();
+        
+        if (f_syl.isTerminal()) {
+            bool val = !sylvan_is_comp(f_syl);
             auto sig = aig.get_constant(val);
             aig.create_po(sig);
             return ok(Aig(std::move(aig)));
@@ -31,11 +40,12 @@ Result<Aig> bdd_to_aig(const Bdd& f) {
         uint32_t num_vars = f.n_vars();
         std::vector<mockturtle::aig_network::signal> pis(num_vars);
         for (uint32_t i = 0; i < num_vars; ++i) {
-            pis[i] = aig.create_pi(); // LSB_FIRST гарантируется порядком создания PI
+            pis[i] = aig.create_pi();
         }
 
-        // Оценка размера для предотвращения реаллокаций и фрагментации кучи.
-        int dag_size = f.nodecount(); // В Sylvan метод называется nodecount()
+        // В C++ API Sylvan метод называется NodeCount() (с большой буквы)
+        // Если не компилируется — попробуй nodeCount() или dagSize()
+        int dag_size = f_syl.NodeCount();
         
         std::unordered_map<uint64_t, mockturtle::aig_network::signal> cache;
         cache.reserve(dag_size);
@@ -43,25 +53,26 @@ Result<Aig> bdd_to_aig(const Bdd& f) {
         std::unordered_set<uint64_t> visited;
         visited.reserve(dag_size);
         
-        // 'seen' предотвращает добавление одного и того же узла в стек многократно
         std::unordered_set<uint64_t> seen;
         seen.reserve(dag_size);
 
         std::vector<sylvan::Bdd> stack;
         stack.reserve(dag_size);
         
-        sylvan::Bdd f_reg = f.isComp() ? !f : f;
-        stack.push_back(f);
-        seen.insert(f_reg.GetMTBDD());
+        sylvan::Bdd f_reg = sylvan_regular(f_syl);
+        stack.push_back(f_syl);
+        seen.insert(f_reg.GetBDD());
 
         std::vector<sylvan::Bdd> post_order;
         post_order.reserve(dag_size);
 
-        // КОНТРАКТ 3: Строго однопоточный итеративный Post-Order обход.
+        // Итеративный Post-Order обход
+        // Методы sylvan::Bdd (Then(), Else(), TopVar()) автоматически 
+        // работают в контексте Lace — не нужен явный lace_call
         while (!stack.empty()) {
             sylvan::Bdd curr = stack.back();
-            sylvan::Bdd reg = curr.isComp() ? !curr : curr;
-            uint64_t reg_id = reg.GetMTBDD();
+            sylvan::Bdd reg = sylvan_regular(curr);
+            uint64_t reg_id = reg.GetBDD();
 
             if (visited.count(reg_id)) {
                 stack.pop_back();
@@ -77,11 +88,11 @@ Result<Aig> bdd_to_aig(const Bdd& f) {
             sylvan::Bdd T = reg.Then();
             sylvan::Bdd E = reg.Else();
             
-            sylvan::Bdd reg_T = T.isComp() ? !T : T;
-            sylvan::Bdd reg_E = E.isComp() ? !E : E;
+            sylvan::Bdd reg_T = sylvan_regular(T);
+            sylvan::Bdd reg_E = sylvan_regular(E);
             
-            uint64_t reg_T_id = reg_T.GetMTBDD();
-            uint64_t reg_E_id = reg_E.GetMTBDD();
+            uint64_t reg_T_id = reg_T.GetBDD();
+            uint64_t reg_E_id = reg_E.GetBDD();
 
             bool T_ready = reg_T.isTerminal() || visited.count(reg_T_id);
             bool E_ready = reg_E.isTerminal() || visited.count(reg_E_id);
@@ -102,28 +113,26 @@ Result<Aig> bdd_to_aig(const Bdd& f) {
             }
         }
 
-        // Лямбда для безопасного извлечения сигнала
         auto get_child_signal = [&](const sylvan::Bdd& child) -> mockturtle::aig_network::signal {
-            sylvan::Bdd reg_child = child.isComp() ? !child : child;
+            sylvan::Bdd reg_child = sylvan_regular(child);
             mockturtle::aig_network::signal base_sig;
             
             if (reg_child.isTerminal()) {
                 base_sig = aig.get_constant(true); 
             } else {
-                auto it = cache.find(reg_child.GetMTBDD());
+                auto it = cache.find(reg_child.GetBDD());
                 assert(it != cache.end() && "Логическая ошибка: узел не найден в кэше!");
                 base_sig = it->second;
             }
             
-            return child.isComp() ? !base_sig : base_sig;
+            return sylvan_is_comp(child) ? !base_sig : base_sig;
         };
 
-        // Формирование AIG снизу вверх (Strashing делегирован mockturtle)
         for (const sylvan::Bdd& reg_node : post_order) {
             uint32_t var_idx = reg_node.TopVar();
             
             if (var_idx >= num_vars) {
-                return fail<Aig>(ErrorCode::InternalError, "bdd_to_aig: индекс переменной BDD превышает n_vars()");
+                return fail<Aig>(ErrorCode::Unsupported, "bdd_to_aig: индекс BDD превышает n_vars()");
             }
             
             auto x_sig = pis[var_idx];
@@ -131,11 +140,10 @@ Result<Aig> bdd_to_aig(const Bdd& f) {
             auto lo_sig = get_child_signal(reg_node.Else());
             
             auto ite_sig = aig.create_ite(x_sig, hi_sig, lo_sig);
-            cache[reg_node.GetMTBDD()] = ite_sig;
+            cache[reg_node.GetBDD()] = ite_sig;
         }
 
-        // Подключаем корень к Primary Output
-        auto root_sig = get_child_signal(f);
+        auto root_sig = get_child_signal(f_syl);
         aig.create_po(root_sig);
 
         return ok(Aig(std::move(aig)));
@@ -143,25 +151,8 @@ Result<Aig> bdd_to_aig(const Bdd& f) {
     } catch (const std::bad_alloc&) {
         return fail<Aig>(ErrorCode::OutOfMemory, "bdd_to_aig: исчерпана память при построении AIG");
     } catch (const std::exception& e) {
-        return fail<Aig>(ErrorCode::InternalError, std::string("bdd_to_aig internal error: ") + e.what());
+        return fail<Aig>(ErrorCode::Unsupported, std::string("bdd_to_aig internal error: ") + e.what());
     }
 }
 
 } // namespace bmm
-
-
-/*
-#include "bdd_to_aig.hpp"
-
-#include <tracy/Tracy.hpp>
-
-namespace bmm {
-
-Result<Aig> bdd_to_aig(const Bdd& bdd) {
-    ZoneScoped;
-    (void)bdd;
-    return fail<Aig>(ErrorCode::NotImplemented, "bdd_to_aig: не реализовано");
-}
-
-}  // namespace bmm
-*/
