@@ -120,7 +120,7 @@ endif()
 # в самом Dockerfile рядом со сборкой OR-Tools).
 # ---------------------------------------------------------------------------
 
-find_package(ortools CONFIG REQUIRED)
+# find_package(ortools CONFIG REQUIRED)
 
 # ---------------------------------------------------------------------------
 # OpenMP (thr/*, *_to_tt/tt_to_*) — часть build-essential/gcc (libgomp),
