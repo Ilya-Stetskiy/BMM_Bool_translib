@@ -53,6 +53,11 @@
 #  if __has_include(<polybori.h>)
 #    define BMM_HAVE_BRIAL 1
 #    include <polybori.h>
+#    include <polybori/routines/pbori_routines_misc.h>
+using polybori::BoolePolynomial;
+using polybori::BoolePolyRing;
+using polybori::BooleMonomial;
+using polybori::substitute_variables;
 #  else
 #    define BMM_HAVE_BRIAL 0
 #  endif
@@ -291,13 +296,16 @@ public:
     // проверка hasConstantPart() на результате — после подстановки константы
     // во все n переменных полином вырождается либо в 0, либо в константу "1".
     bool evaluate(const Assignment& assignment) const {
-        BoolePolynomial p = poly_;
-        for (uint32_t i = 0; i < n_vars_; ++i) {
-            const bool v = i < assignment.size() && assignment[i];
-            p = p.set(i, v ? 1 : 0);
-        }
-        return p.hasConstantPart();
+    const auto& ring = poly_.ring();
+    std::vector<BoolePolynomial> idx2poly;
+    idx2poly.reserve(n_vars_);
+    for (uint32_t i = 0; i < n_vars_; ++i) {
+        const bool v = i < assignment.size() && assignment[i];
+        idx2poly.push_back(v ? ring.one() : ring.zero());
     }
+    BoolePolynomial p = substitute_variables(ring, idx2poly, poly_);
+    return p.hasConstantPart();
+}
 
     Result<TruthTable> to_tt() const {
         if (n_vars_ > kMaxTruthTableVars) {

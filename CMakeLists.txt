@@ -52,7 +52,13 @@ endforeach()
 
 find_path(SYLVAN_INCLUDE_DIR NAMES sylvan_obj.hpp PATHS /usr/local/include /usr/include)
 find_library(SYLVAN_LIBRARY NAMES sylvan PATHS /usr/local/lib /usr/lib)
-if(NOT SYLVAN_INCLUDE_DIR OR NOT SYLVAN_LIBRARY)
+
+# Параллелизм Sylvan (Lace) — отдельная статическая библиотека, которую
+# libsylvan не включает в себя, линковать нужно явно вместе с ней.
+find_library(LACE_LIBRARY NAMES lace PATHS /usr/local/lib /usr/lib)
+
+
+if(NOT SYLVAN_INCLUDE_DIR OR NOT SYLVAN_LIBRARY OR NOT LACE_LIBRARY)
     message(FATAL_ERROR "Sylvan не найден (sylvan_obj.hpp/libsylvan). Проверьте, что "
                          ".devcontainer собрал Sylvan (см. "
                          "coder-deploy/workspace-image/Dockerfile) — без него core/common.hpp "
@@ -186,7 +192,8 @@ if(BRIAL_INCLUDE_DIR)
         target_link_libraries(bmm_core INTERFACE "${BRIAL_LIBRARY}")
     endif()
 endif()
-
+target_include_directories(bmm_core INTERFACE "${SYLVAN_INCLUDE_DIR}")
+target_link_libraries(bmm_core INTERFACE "${SYLVAN_LIBRARY}" "${LACE_LIBRARY}")
 target_link_libraries(bmm_core INTERFACE Threads::Threads)
 
 # ---------------------------------------------------------------------------
@@ -199,8 +206,9 @@ add_library(bmm_verify STATIC
     verify/metamorphic/metamorphic.cpp
     verify/sat_encoding/sat_encoding.cpp
     verify/reference_builders.cpp
+    verify/test_main.cpp
 )
-target_link_libraries(bmm_verify PUBLIC bmm_core)
+target_link_libraries(bmm_verify PUBLIC bmm_core Catch2::Catch2)
 
 # ---------------------------------------------------------------------------
 # bmm_config_dump — крошечная утилита, печатающая, какие условные ветки
@@ -271,7 +279,7 @@ target_link_libraries(bmm_thr PRIVATE OpenMP::OpenMP_CXX TBB::tbb ortools::ortoo
 function(bmm_add_test_executable target_name format_lib source_file)
     add_executable(${target_name} ${source_file})
     target_link_libraries(${target_name} PRIVATE ${format_lib} bmm_verify bmm_core
-                                                  Catch2::Catch2WithMain)
+                                                  Catch2::Catch2)
 endfunction()
 
 bmm_add_test_executable(test_aig bmm_aig aig/test_aig.cpp)
