@@ -8,18 +8,24 @@
 #include <memory>
 #include <atomic>
 #include <functional>
+#include <iostream>
 
 namespace bmm {
 
 namespace {
 
-struct DttCompare {
-    static bool equal(const kitty::dynamic_truth_table& a, const kitty::dynamic_truth_table& b) {
-        return a == b;
+struct MemoKey {
+    kitty::dynamic_truth_table tt;
+    uint32_t var_idx;
+};
+
+struct MemoKeyCompare {
+    static bool equal(const MemoKey& a, const MemoKey& b) {
+        return a.var_idx == b.var_idx && a.tt == b.tt;
     }
-    static size_t hash(const kitty::dynamic_truth_table& tt) {
-        size_t h = 0;
-        for (auto it = tt.begin(); it != tt.end(); ++it) {
+    static size_t hash(const MemoKey& key) {
+        size_t h = std::hash<uint32_t>{}(key.var_idx);
+        for (auto it = key.tt.begin(); it != key.tt.end(); ++it) {
             h ^= std::hash<uint64_t>{}(*it) + 0x9e3779b9 + (h << 6) + (h >> 2);
         }
         return h;
@@ -32,7 +38,7 @@ struct NodeEntry {
     mockturtle::aig_network::signal val;
 };
 
-using MemoMap = tbb::concurrent_hash_map<kitty::dynamic_truth_table, std::shared_ptr<NodeEntry>, DttCompare>;
+using MemoMap = tbb::concurrent_hash_map<MemoKey, std::shared_ptr<NodeEntry>, MemoKeyCompare>;
 
 } // namespace
 
@@ -52,16 +58,33 @@ Result<Aig> tt_to_aig(const TruthTable& tt) {
     }
 
     MemoMap memo;
+    std::mutex net_mutex;
+
+    // Thread-safe wrapper functions for modifying the shared mockturtle AIG network
+    auto get_constant_safe = [&](bool value) {
+        std::lock_guard<std::mutex> lock(net_mutex);
+        return net.get_constant(value);
+    };
+
+    auto create_and_safe = [&](mockturtle::aig_network::signal a, mockturtle::aig_network::signal b) {
+        std::lock_guard<std::mutex> lock(net_mutex);
+        return net.create_and(a, b);
+    };
+
+    auto create_or_safe = [&](mockturtle::aig_network::signal a, mockturtle::aig_network::signal b) {
+        std::lock_guard<std::mutex> lock(net_mutex);
+        return net.create_or(a, b);
+    };
 
     std::function<mockturtle::aig_network::signal(const kitty::dynamic_truth_table&, uint32_t)> build_aig_rec =
         [&](const kitty::dynamic_truth_table& current_tt, uint32_t var_idx) -> mockturtle::aig_network::signal {
         
         // 1. Const checks
         if (kitty::is_const0(current_tt)) {
-            return net.get_constant(false);
+            return get_constant_safe(false);
         }
         if (kitty::is_const0(~current_tt)) {
-            return net.get_constant(true);
+            return get_constant_safe(true);
         }
 
         // 2. Base case
@@ -73,9 +96,10 @@ Result<Aig> tt_to_aig(const TruthTable& tt) {
             }
         }
 
-        // 3. Memoization
+        // 3. Memoization using (tt, var_idx) key to prevent deadlock when a cofactor is identical to its parent
+        MemoKey key{current_tt, var_idx};
         MemoMap::accessor acc;
-        bool is_new = memo.insert(acc, current_tt);
+        bool is_new = memo.insert(acc, key);
         if (is_new) {
             acc->second = std::make_shared<NodeEntry>();
         }
@@ -110,9 +134,9 @@ Result<Aig> tt_to_aig(const TruthTable& tt) {
         }
 
         auto s = pi_signals[split_var];
-        auto term_hi = net.create_and(s, hi_signal);
-        auto term_lo = net.create_and(!s, lo_signal);
-        auto result_signal = net.create_or(term_hi, term_lo);
+        auto term_hi = create_and_safe(s, hi_signal);
+        auto term_lo = create_and_safe(!s, lo_signal);
+        auto result_signal = create_or_safe(term_hi, term_lo);
 
         entry->val = result_signal;
         entry->ready = true;
