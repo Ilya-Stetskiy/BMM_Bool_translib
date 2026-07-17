@@ -13,6 +13,11 @@
 // это честный эффект параллелизма именно вашей реализации, а не
 // гипотетической "второй версии".
 //
+// Формат результата (ScalingPoint) и печать — общие с OpenMP-версией этого
+// же харнесса, см. benchmarks/scaling.hpp и benchmarks/openmp_scaling.hpp:
+// строки BMM_BENCH/BMM_BENCH_SUMMARY в выводе теста одинаковы независимо от
+// backend'а конкретной функции.
+//
 // Использование (см. секции "*_tbb_scaling" в test_aig.cpp/test_anf.cpp):
 //   auto point = bmm::benchmarks::measure_scaling("n=12", [&] {
 //       auto result = tt_to_aig(input);
@@ -22,23 +27,15 @@
 
 #pragma once
 
-#include <algorithm>
 #include <chrono>
 #include <functional>
-#include <ostream>
 #include <string>
-#include <vector>
 
 #include <oneapi/tbb/global_control.h>
 
-namespace bmm::benchmarks {
+#include "benchmarks/scaling.hpp"
 
-struct ScalingPoint {
-    std::string size_label;
-    double single_threaded_ms = 0.0;
-    double parallel_ms = 0.0;
-    double speedup = 0.0;  // single_threaded_ms / parallel_ms; >1 — параллельная версия быстрее
-};
+namespace bmm::benchmarks {
 
 // Прогревает `work` один раз (первый вызов часто содержит одноразовые
 // издержки — аллокация TBB-арены, ленивая инициализация статиков), затем
@@ -68,42 +65,6 @@ inline ScalingPoint measure_scaling(const std::string& size_label,
 
     point.speedup = point.parallel_ms > 0.0 ? point.single_threaded_ms / point.parallel_ms : 0.0;
     return point;
-}
-
-// Машиночитаемая строка для generate_status.sh (см. STATUS.md, раздел
-// "Параллельность aig/anf") — тот же принцип, что и BMM_STATUS в
-// verify/test_runner.hpp, но для результатов замера, не PASS/FAIL/SKIP.
-inline void print_bench_line(const std::string& function_name, const ScalingPoint& point,
-                              std::ostream& os) {
-    os << "BMM_BENCH " << function_name << " size=" << point.size_label
-       << " single_ms=" << point.single_threaded_ms << " parallel_ms=" << point.parallel_ms
-       << " speedup=" << point.speedup << "\n";
-}
-
-// Итоговая строка по функции (после всех размеров) — вердикт, который
-// реально попадёт в STATUS.md как одна строка на функцию (детальные
-// per-size BMM_BENCH строки — для тех, кто хочет посмотреть глубже, в
-// сыром выводе теста, не в STATUS.md).
-inline void print_bench_summary(const std::string& function_name,
-                                 const std::vector<ScalingPoint>& points, std::ostream& os) {
-    if (points.empty()) {
-        os << "BMM_BENCH_SUMMARY " << function_name << " нет данных\n";
-        return;
-    }
-    double best_speedup = 0.0;
-    for (const auto& p : points) best_speedup = std::max(best_speedup, p.speedup);
-
-    os << "BMM_BENCH_SUMMARY " << function_name << " ";
-    if (best_speedup > 1.05) {
-        os << "параллельная версия дала ускорение до x" << best_speedup;
-    } else if (best_speedup < 0.95 && best_speedup > 0.0) {
-        os << "параллельная версия оказалась МЕДЛЕННЕЕ (x" << best_speedup
-           << ") — см. известные ограничения, вероятно накладные расходы TBB "
-              "перевешивают выигрыш на этих размерах входа";
-    } else {
-        os << "заметного эффекта от параллелизма не обнаружено (x" << best_speedup << ")";
-    }
-    os << "\n";
 }
 
 }  // namespace bmm::benchmarks
