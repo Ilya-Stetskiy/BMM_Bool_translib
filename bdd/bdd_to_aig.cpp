@@ -5,7 +5,6 @@
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
-#include <cassert>
 #include <stdexcept>
 
 namespace bmm {
@@ -41,59 +40,62 @@ Result<Aig> bdd_to_aig(const Bdd& f) {
         
         std::unordered_map<uint64_t, mockturtle::aig_network::signal> cache;
         cache.reserve(dag_size);
+        
+        // Увеличиваем запас для стека, так как теперь допускаются временные дубликаты
+        std::vector<sylvan::Bdd> stack;
+        stack.reserve(dag_size * 2);
+        
         std::unordered_set<uint64_t> visited;
         visited.reserve(dag_size);
-        std::unordered_set<uint64_t> seen;
-        seen.reserve(dag_size);
-        std::vector<sylvan::Bdd> stack;
-        stack.reserve(dag_size);
 
         sylvan::Bdd f_reg(f_syl.GetBDD() & ~COMP_BIT);
         stack.push_back(f_reg);
-        seen.insert(f_reg.GetBDD());
 
         std::vector<sylvan::Bdd> post_order;
         post_order.reserve(dag_size);
 
+        // НАДЁЖНЫЙ итеративный Post-Order обход без риска бесконечного цикла
         while (!stack.empty()) {
-            sylvan::Bdd reg = stack.back();
-            uint64_t reg_id = reg.GetBDD();
+            sylvan::Bdd curr = stack.back();
+            uint64_t curr_id = curr.GetBDD();
 
-            if (visited.count(reg_id)) {
+            // Если узел уже полностью обработан, просто убираем его дубликат из стека
+            if (visited.count(curr_id)) {
                 stack.pop_back();
                 continue;
             }
 
-            if (reg.isZero() || reg.isOne()) {
-                visited.insert(reg_id);
+            // Терминалы обрабатываем сразу
+            if (curr.isZero() || curr.isOne()) {
+                visited.insert(curr_id);
+                post_order.push_back(curr);
                 stack.pop_back();
                 continue;
             }
 
-            sylvan::Bdd T = reg.Then();
-            sylvan::Bdd E = reg.Else();
+            sylvan::Bdd T = curr.Then();
+            sylvan::Bdd E = curr.Else();
             
-            sylvan::Bdd reg_T(T.GetBDD() & ~COMP_BIT);
-            sylvan::Bdd reg_E(E.GetBDD() & ~COMP_BIT);
-            
-            uint64_t reg_T_id = reg_T.GetBDD();
-            uint64_t reg_E_id = reg_E.GetBDD();
+            uint64_t T_reg_id = T.GetBDD() & ~COMP_BIT;
+            uint64_t E_reg_id = E.GetBDD() & ~COMP_BIT;
 
-            bool T_ready = (T.isZero() || T.isOne() || visited.count(reg_T_id));
-            bool E_ready = (E.isZero() || E.isOne() || visited.count(reg_E_id));
+            bool T_visited = T.isZero() || T.isOne() || visited.count(T_reg_id);
+            bool E_visited = E.isZero() || E.isOne() || visited.count(E_reg_id);
 
-            if (T_ready && E_ready) {
-                visited.insert(reg_id);
-                post_order.push_back(reg);
+            if (T_visited && E_visited) {
+                // Оба ребёнка обработаны, текущий узел готов
+                visited.insert(curr_id);
+                post_order.push_back(curr);
                 stack.pop_back();
             } else {
-                if (!T_ready && !seen.count(reg_T_id)) {
-                    seen.insert(reg_T_id);
-                    stack.push_back(reg_T);
+                // Пушим непосещённых детей. 
+                // Дубликаты допустимы: они будут безопасно проигнорированы 
+                // проверкой visited.count() при их извлечении из стека.
+                if (!T_visited) {
+                    stack.push_back(sylvan::Bdd(T_reg_id));
                 }
-                if (!E_ready && !seen.count(reg_E_id)) {
-                    seen.insert(reg_E_id);
-                    stack.push_back(reg_E);
+                if (!E_visited) {
+                    stack.push_back(sylvan::Bdd(E_reg_id));
                 }
             }
         }
@@ -128,6 +130,7 @@ Result<Aig> bdd_to_aig(const Bdd& f) {
             auto hi_sig = get_child_signal(reg_node.Then());
             auto lo_sig = get_child_signal(reg_node.Else());
             
+            // Надёжная ручная сборка ITE: f = ~( ~(x & hi) & ~(~x & lo) )
             auto n1 = aig.create_and(x_sig, hi_sig);
             auto n2 = aig.create_and(!x_sig, lo_sig);
             auto ite_sig = !aig.create_and(!n1, !n2);
