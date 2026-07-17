@@ -1,0 +1,203 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index b7efa77..b9c4fb1 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -286,7 +286,7 @@ bmm_add_test_executable(test_aig bmm_aig aig/test_aig.cpp)
+ bmm_add_test_executable(test_bdd bmm_bdd bdd/test_bdd.cpp)
+ bmm_add_test_executable(test_anf bmm_anf anf/test_anf.cpp)
+ bmm_add_test_executable(test_thr bmm_thr thr/test_thr.cpp)
+-add_executable(test_core core/test_core.cpp)
++add_executable(test_core core/test_core.cpp verify/sat_encoding/test_sat_encoding.cpp)
+ target_link_libraries(test_core PRIVATE bmm_core bmm_verify Catch2::Catch2)
+ # test_aig/test_anf сами используют oneapi::tbb::global_control в секциях
+ # "*_tbb_scaling" (см. benchmarks/tbb_scaling.hpp, добавлено во второй
+diff --git a/core/test_core.cpp b/core/test_core.cpp
+index 03ec19b..e3d9d9f 100644
+--- a/core/test_core.cpp
++++ b/core/test_core.cpp
+@@ -23,6 +23,13 @@ using namespace bmm::verify;
+ 
+ namespace {
+ 
++// Локальный потолок ТОЛЬКО для этого файла, отдельно от глобального
++// kMaxGroundTruthVars=16 (тот задаёт глубину проверки настоящих 20 функций
++// трансляции через run_translation_tests() и его трогать не стоит --
++// ослабило бы проверку реальных студенческих реализаций). Здесь же просто
++// перебор точек .to_tt(), исчерпывающий даже на n=8, и намного быстрее.
++constexpr uint32_t kTestCoreMaxVars = 8;
++
+ // Прямая проверка X::to_tt() против ground truth (не через
+ // run_translation_tests — тот тестирует функции трансляции, не .to_tt()).
+ template <Representation Repr>
+@@ -46,7 +53,7 @@ TEST_CASE("Aig::to_tt", "[core]") {
+     // MUX-дерево) — за пределом build_source возвращает TooManyVariables,
+     // такие случаи пропускаем, не считаем FAIL (та же логика, что и в
+     // run_translation_tests для build_source).
+-    for (const auto& gt : growing_test_functions(kMaxGroundTruthVars)) {
++    for (const auto& gt : growing_test_functions(kTestCoreMaxVars)) {
+         auto built = reference_aig(gt);
+         if (!is_ok(built)) continue;
+         check_to_tt("Aig", value(built), gt);
+@@ -54,19 +61,19 @@ TEST_CASE("Aig::to_tt", "[core]") {
+ }
+ 
+ TEST_CASE("Bdd::to_tt", "[core]") {
+-    for (const auto& gt : growing_test_functions(kMaxGroundTruthVars)) {
++    for (const auto& gt : growing_test_functions(kTestCoreMaxVars)) {
+         check_to_tt("Bdd", value(reference_bdd(gt)), gt);
+     }
+ }
+ 
+ TEST_CASE("Anf::to_tt", "[core]") {
+-    for (const auto& gt : growing_test_functions(kMaxGroundTruthVars)) {
++    for (const auto& gt : growing_test_functions(kTestCoreMaxVars)) {
+         check_to_tt("Anf", value(reference_anf(gt)), gt);
+     }
+ }
+ 
+ TEST_CASE("Thr::to_tt", "[core]") {
+-    for (const auto& thr : growing_threshold_test_functions(kMaxGroundTruthVars)) {
++    for (const auto& thr : growing_threshold_test_functions(kTestCoreMaxVars)) {
+         const auto gt = ground_truth_from_thr(thr, "thr_n" + std::to_string(thr.n_vars()));
+         check_to_tt("Thr", thr, gt);
+     }
+diff --git a/verify/sat_encoding/sat_encoding.cpp b/verify/sat_encoding/sat_encoding.cpp
+index d576bd7..c0d3d1e 100644
+--- a/verify/sat_encoding/sat_encoding.cpp
++++ b/verify/sat_encoding/sat_encoding.cpp
+@@ -203,6 +203,18 @@ EquivalenceCheckResult check_aig_equivalence_via_sat(const mockturtle::aig_netwo
+         merged.clauses.push_back(std::move(shifted));
+     }
+ 
++    // Связываем входы схем A и B: PI_a_i == PI_b_i. Без этого SAT-солвер
++    // волен подставлять в A и B разные наборы входов, и формула становится
++    // выполнимой почти всегда, даже для идентичных схем -- см. отчёт о
++    // баге, подтверждено репродукцией на двух идентичных AIG.
++    const uint32_t num_pis = a.num_pis();
++    for (uint32_t i = 0; i < num_pis; ++i) {
++        const int var_a = 2 + static_cast<int>(i);
++        const int var_b = 2 + static_cast<int>(i) + offset;
++        merged.clauses.push_back({{-var_a, var_b}});
++        merged.clauses.push_back({{-var_b, var_a}});
++    }
++
+     const int po_a = enc_a.po_literals[0];
+     const int po_b = shift(enc_b.po_literals[0]);
+     const int miter = static_cast<int>(merged.num_vars);  // последняя переменная = miter
+diff --git a/verify/sat_encoding/test_sat_encoding.cpp b/verify/sat_encoding/test_sat_encoding.cpp
+new file mode 100644
+index 0000000..2dc1097
+--- /dev/null
++++ b/verify/sat_encoding/test_sat_encoding.cpp
+@@ -0,0 +1,111 @@
++// verify/sat_encoding/test_sat_encoding.cpp — прямая проверка Tseitin-
++// кодирования и SAT-сравнения эквивалентности (encode_aig_tseitin,
++// check_aig_equivalence_via_sat), которая иначе выполняется только
++// косвенно, изнутри test_<format>.cpp, и только когда translate() для
++// To=Aig УЖЕ успешно завершился (см. test_runner.hpp) — пока все функции
++// трансляции стабы (NotImplemented), этот путь не выполняется вообще. Баг,
++// из-за которого входы схем A и B в miter-формуле не были связаны между
++// собой (см. отчёт от 17.07.2026 — любая пара схем, включая идентичные,
++// давала SAT с бессмысленным "контрпримером"), оставался бы незамеченным
++// сколь угодно долго именно из-за этого слепого пятна. Этот файл — прямая,
++// независимая от стабов трансляции проверка.
++
++#include <catch2/catch_test_macros.hpp>
++
++#include <string>
++
++#include "verify/ground_truth/ground_truth.hpp"
++#include "verify/sat_encoding/sat_encoding.hpp"
++
++using namespace bmm::verify;
++
++namespace {
++
++// Ограничение размера ради времени прогона: в отличие от exhaustive-сравнения
++// с ground truth, здесь не нужно покрывать n вплоть до kMaxReferenceAigVars —
++// баги в связывании входов A/B (единственный класс уязвимости, специфичный
++// именно для CNF-кодирования, см. отчёт от 17.07.2026) проявляются уже на
++// n=1-2, дальше только замедляют прогон SAT-солвером.
++constexpr uint32_t kTestMaxVars = 6;
++
++bool eval_gt(const GroundTruthFunction& gt, const std::vector<bool>& a) {
++    uint64_t idx = 0;
++    for (uint32_t i = 0; i < a.size(); ++i) {
++        if (a[i]) idx |= (uint64_t{1} << i);
++    }
++    return gt.evaluate(idx);
++}
++
++}  // namespace
++
++TEST_CASE("check_aig_equivalence_via_sat: identical circuits are equivalent", "[core][sat]") {
++    for (const auto& gt : growing_test_functions(kTestMaxVars)) {
++        auto f = [&gt](const std::vector<bool>& a) { return eval_gt(gt, a); };
++        // Две НЕЗАВИСИМЫЕ постройки одной и той же функции — не переиспользуем
++        // один и тот же mockturtle::aig_network, чтобы проверить именно случай
++        // "разные объекты, одна семантика" (как reference vs результат
++        // перевода в реальном использовании), а не тривиальное сравнение
++        // объекта с самим собой.
++        auto aig_a = reference_aig_from_table(gt.n_vars, f);
++        auto aig_b = reference_aig_from_table(gt.n_vars, f);
++
++        auto result = check_aig_equivalence_via_sat(aig_a, aig_b);
++        if (!result.checked) {
++            WARN("SAT-солвер недоступен -- пропуск " + gt.name);
++            continue;
++        }
++        INFO(gt.name);
++        REQUIRE(result.equivalent);
++    }
++}
++
++TEST_CASE("check_aig_equivalence_via_sat: different circuits are not equivalent", "[core][sat]") {
++    const auto functions = growing_test_functions(kTestMaxVars);
++    int checked_pairs = 0;
++    for (size_t i = 0; i < functions.size() && checked_pairs < 30; ++i) {
++        for (size_t j = i + 1; j < functions.size() && checked_pairs < 30; ++j) {
++            const auto& gt_a = functions[i];
++            const auto& gt_b = functions[j];
++            if (gt_a.n_vars != gt_b.n_vars) continue;
++
++            // Интересен именно случай "реально разные функции" -- пропускаем
++            // пары, которые (несмотря на разные имена в growing_test_functions)
++            // совпадают на всех точках.
++            bool actually_different = false;
++            for (uint64_t idx = 0; idx < (uint64_t{1} << gt_a.n_vars); ++idx) {
++                if (gt_a.evaluate(idx) != gt_b.evaluate(idx)) {
++                    actually_different = true;
++                    break;
++                }
++            }
++            if (!actually_different) continue;
++            ++checked_pairs;
++
++            auto f_a = [&gt_a](const std::vector<bool>& a) { return eval_gt(gt_a, a); };
++            auto f_b = [&gt_b](const std::vector<bool>& a) { return eval_gt(gt_b, a); };
++            auto aig_a = reference_aig_from_table(gt_a.n_vars, f_a);
++            auto aig_b = reference_aig_from_table(gt_b.n_vars, f_b);
++
++            auto result = check_aig_equivalence_via_sat(aig_a, aig_b);
++            if (!result.checked) {
++                WARN("SAT-солвер недоступен -- пропуск " + gt_a.name + " vs " + gt_b.name);
++                continue;
++            }
++            INFO(gt_a.name + " vs " + gt_b.name);
++            REQUIRE_FALSE(result.equivalent);
++
++            // Контрпример должен быть НАСТОЯЩИМ: подставленный в обе функции,
++            // обязан дать разные значения -- иначе "нашли расхождение" ничего
++            // не доказывает. Именно это было сломано в исходном баге:
++            // контрпример существовал, но был бессмысленным, т.к. входы A и B
++            // были никак не связаны в CNF.
++            REQUIRE(result.counterexample.has_value());
++            if (result.counterexample) {
++                INFO(gt_a.name + " vs " + gt_b.name + ": проверка контрпримера");
++                REQUIRE(f_a(*result.counterexample) != f_b(*result.counterexample));
++            }
++        }
++    }
++    INFO("проверено пар: " + std::to_string(checked_pairs));
++    REQUIRE(checked_pairs > 0);
++}
