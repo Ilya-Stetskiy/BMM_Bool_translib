@@ -4,17 +4,27 @@
 #include <sylvan_obj.hpp>
 #include <vector>
 #include <unordered_map>
-#include <unordered_set>
 #include <stdexcept>
 
 namespace bmm {
 
 constexpr uint64_t COMP_BIT = 0x8000000000000000ULL;
 
-// Кадр стека для имитации рекурсивного вызова
+// Единое состояние узла для устранения дублирования структур данных
+enum class NodeState : uint8_t {
+    New,       // 0: Узел еще не видели
+    Expanded,  // 1: Дети добавлены в стек, ждем их обработки
+    Built      // 2: Сигнал построен и готов к использованию
+};
+
+struct NodeInfo {
+    NodeState state = NodeState::New;
+    mockturtle::aig_network::signal sig; // Валидно только при state == Built
+};
+
 struct Frame {
     sylvan::Bdd node;
-    bool expanded; // false = первый визит, true = дети обработаны, пора строить
+    bool is_return; // false = pre-order (раскрыть), true = post-order (построить)
 };
 
 Result<Aig> bdd_to_aig(const Bdd& f) {
@@ -44,13 +54,9 @@ Result<Aig> bdd_to_aig(const Bdd& f) {
 
         const size_t dag_size = std::max<size_t>(f_syl.NodeCount(), 64);
 
-        // Кэш: regular_id -> signal (также служит маркером состояния "Built")
-        std::unordered_map<uint64_t, mockturtle::aig_network::signal> cache;
-        cache.reserve(dag_size);
-
-        // Expanded: regular_id (маркер состояния "Gray" / "в стеке")
-        std::unordered_set<uint64_t> expanded;
-        expanded.reserve(dag_size);
+        // ЕДИНАЯ таблица: хранит и состояние, и результат.
+        std::unordered_map<uint64_t, NodeInfo> node_info;
+        node_info.reserve(dag_size);
 
         std::vector<Frame> stack;
         stack.reserve(dag_size * 2);
@@ -58,6 +64,7 @@ Result<Aig> bdd_to_aig(const Bdd& f) {
         const uint64_t f_reg_raw = f_syl.GetBDD() & ~COMP_BIT;
         const bool f_is_comp = (f_syl.GetBDD() & COMP_BIT) != 0;
 
+        // КЛАДЁМ В СТЕК ТОЛЬКО РЕГУЛЯРНЫЙ УЗЕЛ
         stack.push_back({sylvan::Bdd(f_reg_raw), false});
 
         // Однопроходный итеративный DFS
@@ -67,10 +74,16 @@ Result<Aig> bdd_to_aig(const Bdd& f) {
 
             const uint64_t raw = frame.node.GetBDD();
             const uint64_t reg_raw = raw & ~COMP_BIT;
-            const bool is_comp = (raw & COMP_BIT) != 0;
 
-            if (frame.expanded) {
-                // ЭТАП 2: Дети гарантированно уже обработаны и лежат в cache.
+            // Получаем или создаем запись в единой таблице (1 хэш-поиск)
+            auto& info = node_info[reg_raw];
+
+            if (frame.is_return) {
+                // ЭТАП 2: Построение (post-order)
+                if (info.state == NodeState::Built) {
+                    continue;
+                }
+
                 const uint32_t var_idx = frame.node.TopVar();
                 if (var_idx >= num_vars) {
                     return fail<Aig>(ErrorCode::InvalidArgument, "bdd_to_aig: индекс BDD превышает n_vars()");
@@ -92,7 +105,11 @@ Result<Aig> bdd_to_aig(const Bdd& f) {
                     } else if (c_reg_node.isOne()) {
                         s = aig.get_constant(true);
                     } else {
-                        s = cache.at(c_reg); // Гарантированно есть, так как мы в post-order
+                        auto it = node_info.find(c_reg);
+                        if (it == node_info.end() || it->second.state != NodeState::Built) {
+                            throw std::logic_error("bdd_to_aig: child node not built (invariant violated)");
+                        }
+                        s = it->second.sig;
                     }
                     return c_comp ? !s : s;
                 };
@@ -100,50 +117,58 @@ Result<Aig> bdd_to_aig(const Bdd& f) {
                 const auto hi_sig = get_sig(frame.node.Then());
                 const auto lo_sig = get_sig(frame.node.Else());
 
-                const auto ite_sig = aig.create_ite(x_sig, hi_sig, lo_sig);
-                
-                // Помечаем как Built, добавляя в кэш
-                cache.try_emplace(reg_raw, ite_sig);
+                info.sig = aig.create_ite(x_sig, hi_sig, lo_sig);
+                info.state = NodeState::Built;
 
             } else {
-                // ЭТАП 1: Первый визит в узел
-                
-                // Если уже Built (есть в кэше) или уже в стеке (Expanded), пропускаем
-                if (cache.count(reg_raw) || expanded.count(reg_raw)) {
+                // ЭТАП 1: Первый визит (pre-order)
+                if (info.state == NodeState::Built) {
+                    continue;
+                }
+                if (info.state == NodeState::Expanded) {
                     continue;
                 }
 
-                // Помечаем как Expanded (Gray)
-                expanded.insert(reg_raw);
+                // Помечаем как Expanded
+                info.state = NodeState::Expanded;
 
-                // Сначала кладем в стек задачу на построение этого узла (после детей)
+                // 1. Сначала кладем задачу на построение этого узла (post-order)
                 stack.push_back({frame.node, true});
 
-                // Затем кладем детей (они будут обработаны первыми, LIFO)
+                // 2. Затем кладем детей (pre-order, LIFO)
                 const sylvan::Bdd T = frame.node.Then();
                 const sylvan::Bdd E = frame.node.Else();
 
                 const uint64_t T_reg = T.GetBDD() & ~COMP_BIT;
                 const uint64_t E_reg = E.GetBDD() & ~COMP_BIT;
 
-                // Кладем в стек только нетерминальные узлы, которые еще не Built и не Expanded
-                if (!T.isZero() && !T.isOne() && !cache.count(T_reg) && !expanded.count(T_reg)) {
-                    stack.push_back({sylvan::Bdd(T_reg), false});
+                // Вспомогательная лямбда: кладем в стек ТОЛЬКО регулярные узлы!
+                auto push_if_needed = [&](uint64_t child_reg) {
+                    auto it = node_info.find(child_reg);
+                    if (it == node_info.end() || (it->second.state != NodeState::Built && it->second.state != NodeState::Expanded)) {
+                        stack.push_back({sylvan::Bdd(child_reg), false});
+                    }
+                };
+
+                if (!T.isZero() && !T.isOne()) {
+                    push_if_needed(T_reg);
                 }
-                if (!E.isZero() && !E.isOne() && !cache.count(E_reg) && !expanded.count(E_reg)) {
-                    stack.push_back({sylvan::Bdd(E_reg), false});
+                if (!E.isZero() && !E.isOne()) {
+                    push_if_needed(E_reg);
                 }
             }
         }
 
-        // Извлекаем сигнал корня
-        auto root_it = cache.find(f_reg_raw);
-        if (root_it == cache.end()) {
-            return fail<Aig>(ErrorCode::InvalidArgument, "bdd_to_aig: внутренняя ошибка, корень не найден");
+        // Извлекаем результат корня
+        auto it = node_info.find(f_reg_raw);
+        if (it == node_info.end() || it->second.state != NodeState::Built) {
+            return fail<Aig>(ErrorCode::InvalidArgument, "bdd_to_aig: внутренняя ошибка, корень не построен");
         }
         
-        mockturtle::aig_network::signal root_sig = root_it->second;
-        if (f_is_comp) root_sig = !root_sig;
+        mockturtle::aig_network::signal root_sig = it->second.sig;
+        if (f_is_comp) {
+            root_sig = !root_sig;
+        }
 
         aig.create_po(root_sig);
         return ok(Aig(std::move(aig)));
