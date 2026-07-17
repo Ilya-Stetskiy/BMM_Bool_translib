@@ -1,0 +1,446 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index b9c4fb1..5105de8 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -294,6 +294,7 @@ target_link_libraries(test_core PRIVATE bmm_core bmm_verify Catch2::Catch2)
+ # распространяется транзитивно на test_aig/test_anf, поэтому линкуем явно.
+ target_link_libraries(test_aig PRIVATE TBB::tbb)
+ target_link_libraries(test_anf PRIVATE TBB::tbb)
++target_link_libraries(test_thr PRIVATE OpenMP::OpenMP_CXX)
+ 
+ include(CTest)
+ include(Catch)
+diff --git a/benchmarks/openmp_scaling.hpp b/benchmarks/openmp_scaling.hpp
+new file mode 100644
+index 0000000..611afc5
+--- /dev/null
++++ b/benchmarks/openmp_scaling.hpp
+@@ -0,0 +1,68 @@
++// benchmarks/openmp_scaling.hpp — аналог benchmarks/tbb_scaling.hpp для
++// функций, использующих OpenMP (core/CONVENTIONS.md п.6: thr/*, кроме
++// thr_to_bdd — тот идёт по правилу "Bdd — только Sylvan/Lace" с более
++// высоким приоритетом; и *_to_tt/tt_to_* сверх уже покрытых TBB-правилом
++// aig_to_*/anf_to_*/tt_to_aig/tt_to_anf).
++//
++// В отличие от TBB (RAII-скоуп tbb::global_control, ограничивающий именно
++// вызов внутри блока), OpenMP управляется ГЛОБАЛЬНЫМ изменяемым состоянием
++// (omp_set_num_threads() — влияет на все последующие "#pragma omp parallel"
++// в процессе, не только на один вызов). Поэтому здесь нет RAII-объекта:
++// явно выставляем 1 поток перед однопоточным замером и явно возвращаем
++// дефолтное число потоков перед параллельным. Само измерение (ScalingPoint,
++// печать) идентично TBB-версии — оба используют один и тот же
++// benchmarks/scaling.hpp, поэтому вывод (BMM_BENCH/BMM_BENCH_SUMMARY)
++// выглядит одинаково независимо от backend'а конкретной функции.
++//
++// Использование (см. секции "*_openmp_scaling" в test_thr.cpp):
++//   auto point = bmm::benchmarks::measure_scaling_omp("n=12", [&] {
++//       auto result = tt_to_thr(input);
++//       benchmark::doNotOptimizeAway(result);
++//   });
++//   bmm::benchmarks::print_bench_line("tt_to_thr", point);
++
++#pragma once
++
++#include <chrono>
++#include <functional>
++#include <string>
++
++#include <omp.h>
++
++#include "benchmarks/scaling.hpp"
++
++namespace bmm::benchmarks {
++
++inline ScalingPoint measure_scaling_omp(const std::string& size_label,
++                                         const std::function<void()>& work) {
++    work();  // прогрев — не входит в измерение
++
++    ScalingPoint point;
++    point.size_label = size_label;
++
++    const int default_threads = omp_get_max_threads();
++
++    omp_set_num_threads(1);
++    {
++        const auto start = std::chrono::steady_clock::now();
++        work();
++        const auto end = std::chrono::steady_clock::now();
++        point.single_threaded_ms = std::chrono::duration<double, std::milli>(end - start).count();
++    }
++
++    omp_set_num_threads(default_threads);
++    {
++        // Дефолтное число потоков — omp_get_max_threads() на старте процесса
++        // (обычно = число логических ядер контейнера, если OMP_NUM_THREADS
++        // не выставлен явно).
++        const auto start = std::chrono::steady_clock::now();
++        work();
++        const auto end = std::chrono::steady_clock::now();
++        point.parallel_ms = std::chrono::duration<double, std::milli>(end - start).count();
++    }
++
++    point.speedup = point.parallel_ms > 0.0 ? point.single_threaded_ms / point.parallel_ms : 0.0;
++    return point;
++}
++
++}  // namespace bmm::benchmarks
+diff --git a/benchmarks/scaling.hpp b/benchmarks/scaling.hpp
+new file mode 100644
+index 0000000..e8ac737
+--- /dev/null
++++ b/benchmarks/scaling.hpp
+@@ -0,0 +1,65 @@
++// benchmarks/scaling.hpp — формат результата и печать, ОБЩИЕ для всех
++// backend'ов параллелизма (TBB, OpenMP). Сам замер (как именно заставить
++// код выполниться в 1 поток vs по умолчанию) специфичен для backend'а и
++// живёт в benchmarks/tbb_scaling.hpp / benchmarks/openmp_scaling.hpp —
++// каждый из них возвращает ScalingPoint и печатает его этими же функциями,
++// поэтому строки BMM_BENCH/BMM_BENCH_SUMMARY в выводе теста выглядят
++// одинаково независимо от того, какой backend использует конкретная
++// функция трансляции (см. core/CONVENTIONS.md п.6 за тем, что кому
++// положено).
++
++#pragma once
++
++#include <algorithm>
++#include <ostream>
++#include <string>
++#include <vector>
++
++namespace bmm::benchmarks {
++
++struct ScalingPoint {
++    std::string size_label;
++    double single_threaded_ms = 0.0;
++    double parallel_ms = 0.0;
++    double speedup = 0.0;  // single_threaded_ms / parallel_ms; >1 — параллельная версия быстрее
++};
++
++// Машиночитаемая строка для generate_status.sh (см. STATUS.md, раздел
++// "Параллельность") — тот же принцип, что и BMM_STATUS в
++// verify/test_runner.hpp, но для результатов замера, не PASS/FAIL/SKIP.
++inline void print_bench_line(const std::string& function_name, const ScalingPoint& point,
++                              std::ostream& os) {
++    os << "BMM_BENCH " << function_name << " size=" << point.size_label
++       << " single_ms=" << point.single_threaded_ms << " parallel_ms=" << point.parallel_ms
++       << " speedup=" << point.speedup << "\n";
++}
++
++// Итоговая строка по функции (после всех размеров) — вердикт, который
++// реально попадёт в STATUS.md как одна строка на функцию (детальные
++// per-size BMM_BENCH строки — для тех, кто хочет посмотреть глубже, в
++// сыром выводе теста, не в STATUS.md). Формат идентичен для TBB и OpenMP —
++// студент/преподаватель видит одну и ту же по структуре строку
++// "такая-то функция так-то ускорена" вне зависимости от backend'а.
++inline void print_bench_summary(const std::string& function_name,
++                                 const std::vector<ScalingPoint>& points, std::ostream& os) {
++    if (points.empty()) {
++        os << "BMM_BENCH_SUMMARY " << function_name << " нет данных\n";
++        return;
++    }
++    double best_speedup = 0.0;
++    for (const auto& p : points) best_speedup = std::max(best_speedup, p.speedup);
++
++    os << "BMM_BENCH_SUMMARY " << function_name << " ";
++    if (best_speedup > 1.05) {
++        os << "параллельная версия дала ускорение до x" << best_speedup;
++    } else if (best_speedup < 0.95 && best_speedup > 0.0) {
++        os << "параллельная версия оказалась МЕДЛЕННЕЕ (x" << best_speedup
++           << ") — см. известные ограничения, вероятно накладные расходы распараллеливания "
++              "перевешивают выигрыш на этих размерах входа";
++    } else {
++        os << "заметного эффекта от параллелизма не обнаружено (x" << best_speedup << ")";
++    }
++    os << "\n";
++}
++
++}  // namespace bmm::benchmarks
+diff --git a/benchmarks/tbb_scaling.hpp b/benchmarks/tbb_scaling.hpp
+index 2e5cfee..b4593e0 100644
+--- a/benchmarks/tbb_scaling.hpp
++++ b/benchmarks/tbb_scaling.hpp
+@@ -13,6 +13,11 @@
+ // это честный эффект параллелизма именно вашей реализации, а не
+ // гипотетической "второй версии".
+ //
++// Формат результата (ScalingPoint) и печать — общие с OpenMP-версией этого
++// же харнесса, см. benchmarks/scaling.hpp и benchmarks/openmp_scaling.hpp:
++// строки BMM_BENCH/BMM_BENCH_SUMMARY в выводе теста одинаковы независимо от
++// backend'а конкретной функции.
++//
+ // Использование (см. секции "*_tbb_scaling" в test_aig.cpp/test_anf.cpp):
+ //   auto point = bmm::benchmarks::measure_scaling("n=12", [&] {
+ //       auto result = tt_to_aig(input);
+@@ -22,23 +27,15 @@
+ 
+ #pragma once
+ 
+-#include <algorithm>
+ #include <chrono>
+ #include <functional>
+-#include <ostream>
+ #include <string>
+-#include <vector>
+ 
+ #include <oneapi/tbb/global_control.h>
+ 
+-namespace bmm::benchmarks {
++#include "benchmarks/scaling.hpp"
+ 
+-struct ScalingPoint {
+-    std::string size_label;
+-    double single_threaded_ms = 0.0;
+-    double parallel_ms = 0.0;
+-    double speedup = 0.0;  // single_threaded_ms / parallel_ms; >1 — параллельная версия быстрее
+-};
++namespace bmm::benchmarks {
+ 
+ // Прогревает `work` один раз (первый вызов часто содержит одноразовые
+ // издержки — аллокация TBB-арены, ленивая инициализация статиков), затем
+@@ -70,40 +67,4 @@ inline ScalingPoint measure_scaling(const std::string& size_label,
+     return point;
+ }
+ 
+-// Машиночитаемая строка для generate_status.sh (см. STATUS.md, раздел
+-// "Параллельность aig/anf") — тот же принцип, что и BMM_STATUS в
+-// verify/test_runner.hpp, но для результатов замера, не PASS/FAIL/SKIP.
+-inline void print_bench_line(const std::string& function_name, const ScalingPoint& point,
+-                              std::ostream& os) {
+-    os << "BMM_BENCH " << function_name << " size=" << point.size_label
+-       << " single_ms=" << point.single_threaded_ms << " parallel_ms=" << point.parallel_ms
+-       << " speedup=" << point.speedup << "\n";
+-}
+-
+-// Итоговая строка по функции (после всех размеров) — вердикт, который
+-// реально попадёт в STATUS.md как одна строка на функцию (детальные
+-// per-size BMM_BENCH строки — для тех, кто хочет посмотреть глубже, в
+-// сыром выводе теста, не в STATUS.md).
+-inline void print_bench_summary(const std::string& function_name,
+-                                 const std::vector<ScalingPoint>& points, std::ostream& os) {
+-    if (points.empty()) {
+-        os << "BMM_BENCH_SUMMARY " << function_name << " нет данных\n";
+-        return;
+-    }
+-    double best_speedup = 0.0;
+-    for (const auto& p : points) best_speedup = std::max(best_speedup, p.speedup);
+-
+-    os << "BMM_BENCH_SUMMARY " << function_name << " ";
+-    if (best_speedup > 1.05) {
+-        os << "параллельная версия дала ускорение до x" << best_speedup;
+-    } else if (best_speedup < 0.95 && best_speedup > 0.0) {
+-        os << "параллельная версия оказалась МЕДЛЕННЕЕ (x" << best_speedup
+-           << ") — см. известные ограничения, вероятно накладные расходы TBB "
+-              "перевешивают выигрыш на этих размерах входа";
+-    } else {
+-        os << "заметного эффекта от параллелизма не обнаружено (x" << best_speedup << ")";
+-    }
+-    os << "\n";
+-}
+-
+ }  // namespace bmm::benchmarks
+diff --git a/thr/test_thr.cpp b/thr/test_thr.cpp
+index facbc1b..356c63b 100644
+--- a/thr/test_thr.cpp
++++ b/thr/test_thr.cpp
+@@ -12,6 +12,13 @@
+ // verify::growing_threshold_test_functions(), обёрнутый в GroundTruthFunction
+ // через verify::ground_truth_from_thr(), с build_source, находящим исходный
+ // Thr по имени тестового случая (см. threshold_test_set() ниже).
++//
++// OpenMP-бенчмарки (секции "*_openmp_scaling") — см. core/CONVENTIONS.md
++// п.6: thr/* (кроме thr_to_bdd — тот идёт по правилу "Bdd — только
++// Sylvan/Lace" с более высоким приоритетом) обязаны использовать OpenMP.
++// Харнесс замера — benchmarks/openmp_scaling.hpp, тот же формат вывода
++// (BMM_BENCH/BMM_BENCH_SUMMARY), что и у TBB-бенчмарков в
++// aig/test_aig.cpp и anf/test_anf.cpp (общий benchmarks/scaling.hpp).
+ 
+ #include <catch2/catch_test_macros.hpp>
+ 
+@@ -21,6 +28,7 @@
+ #include <string>
+ #include <vector>
+ 
++#include "benchmarks/openmp_scaling.hpp"
+ #include "thr/thr_to_aig.hpp"
+ #include "thr/thr_to_anf.hpp"
+ #include "thr/thr_to_bdd.hpp"
+@@ -98,3 +106,132 @@ TEST_CASE("thr_to_tt", "[thr]") {
+         "thr_to_tt", std::function<Result<TruthTable>(const Thr&)>(thr_to_tt), set.build_source,
+         set.ground_truths));
+ }
++
++// ---------------------------------------------------------------------------
++// Обязательные OpenMP-бенчмарки (core/CONVENTIONS.md п.6) — для thr/* КРОМЕ
++// thr_to_bdd (тот — только Sylvan/Lace, никакого OpenMP, см. правило 1 в
++// приоритете параллелизма). Тот же принцип, что TBB-бенчмарки в
++// aig/test_aig.cpp/anf/test_anf.cpp: замеряем ОДИН И ТОТ ЖЕ вызов под 1
++// потоком и под дефолтным числом потоков (benchmarks/openmp_scaling.hpp),
++// а не пишем отдельную "однопоточную копию" алгоритма.
++//
++// Пока функция не реализована (NotImplemented) — секция печатает SKIP и не
++// тратит время на прогрев/замеры; это ожидаемо сразу после генерации
++// репозитория, не ошибка.
++// ---------------------------------------------------------------------------
++
++namespace {
++
++// Пороговая функция-заглушка для бенчмарка: все веса 1, порог — "чуть больше
++// половины" (majority-подобная), чтобы реальная работа thr_to_*-алгоритма на
++// ней была нетривиальной. Независима от verify::growing_threshold_test_functions
++// (та — для корректности, с случайными весами и детерминированным seed; здесь
++// нужен просто предсказуемый вход растущего размера для замера времени).
++Thr make_bench_threshold(uint32_t n) {
++    std::vector<int64_t> weights(n, 1);
++    return Thr(std::move(weights), static_cast<int64_t>((n + 1) / 2));
++}
++
++// См. aig/test_aig.cpp — тот же независимый маленький генератор для
++// бенчмарков truth-table-based входа (tt_to_thr), продублирован намеренно
++// (не вынесен в общий заголовок verify/, чтобы не тянуть тестовую утилиту в
++// публичный API verify/).
++GroundTruthFunction make_bench_function(uint32_t n) {
++    GroundTruthFunction gt;
++    gt.name = "bench_n" + std::to_string(n);
++    gt.n_vars = n;
++    const uint64_t rows = uint64_t{1} << n;
++    gt.table.resize(rows);
++    for (uint64_t idx = 0; idx < rows; ++idx) {
++        gt.table[idx] = static_cast<uint32_t>(__builtin_popcountll(idx)) > n / 2;
++    }
++    return gt;
++}
++
++// Бенчмарк для tt_to_thr (TruthTable на входе).
++void run_openmp_bench_from_tt(const std::string& name,
++                               const std::function<void(const TruthTable&)>& translate_once,
++                               const std::function<bool(const TruthTable&)>& is_implemented,
++                               const std::vector<uint32_t>& sizes) {
++    std::vector<bmm::benchmarks::ScalingPoint> points;
++    for (uint32_t n : sizes) {
++        const auto gt = make_bench_function(n);
++        auto input = reference_truth_table(gt);
++        if (!is_ok(input)) continue;  // этот размер не построить — пропуск размера
++        if (!is_implemented(value(input))) {
++            std::cout << "BMM_BENCH_SUMMARY " << name << " SKIP (не реализовано)\n";
++            return;
++        }
++        auto point = bmm::benchmarks::measure_scaling_omp(
++            "n=" + std::to_string(n), [&] { translate_once(value(input)); });
++        bmm::benchmarks::print_bench_line(name, point, std::cout);
++        points.push_back(point);
++    }
++    bmm::benchmarks::print_bench_summary(name, points, std::cout);
++}
++
++// Бенчмарк для thr_to_aig/thr_to_anf/thr_to_tt (Thr на входе).
++void run_openmp_bench_from_thr(const std::string& name,
++                                const std::function<void(const Thr&)>& translate_once,
++                                const std::function<bool(const Thr&)>& is_implemented,
++                                const std::vector<uint32_t>& sizes) {
++    std::vector<bmm::benchmarks::ScalingPoint> points;
++    for (uint32_t n : sizes) {
++        const Thr input = make_bench_threshold(n);
++        if (!is_implemented(input)) {
++            std::cout << "BMM_BENCH_SUMMARY " << name << " SKIP (не реализовано)\n";
++            return;
++        }
++        auto point = bmm::benchmarks::measure_scaling_omp(
++            "n=" + std::to_string(n), [&] { translate_once(input); });
++        bmm::benchmarks::print_bench_line(name, point, std::cout);
++        points.push_back(point);
++    }
++    bmm::benchmarks::print_bench_summary(name, points, std::cout);
++}
++
++}  // namespace
++
++TEST_CASE("tt_to_thr_openmp_scaling", "[thr][benchmark]") {
++    run_openmp_bench_from_tt(
++        "tt_to_thr",
++        std::function<void(const TruthTable&)>([](const TruthTable& tt) { (void)tt_to_thr(tt); }),
++        std::function<bool(const TruthTable&)>([](const TruthTable& tt) {
++            auto r = tt_to_thr(tt);
++            return is_ok(r) || error(r).code != ErrorCode::NotImplemented;
++        }),
++        {8, 12, 16});
++}
++
++TEST_CASE("thr_to_aig_openmp_scaling", "[thr][benchmark]") {
++    run_openmp_bench_from_thr(
++        "thr_to_aig",
++        std::function<void(const Thr&)>([](const Thr& thr) { (void)thr_to_aig(thr); }),
++        std::function<bool(const Thr&)>([](const Thr& thr) {
++            auto r = thr_to_aig(thr);
++            return is_ok(r) || error(r).code != ErrorCode::NotImplemented;
++        }),
++        {8, 12, 16});
++}
++
++TEST_CASE("thr_to_anf_openmp_scaling", "[thr][benchmark]") {
++    run_openmp_bench_from_thr(
++        "thr_to_anf",
++        std::function<void(const Thr&)>([](const Thr& thr) { (void)thr_to_anf(thr); }),
++        std::function<bool(const Thr&)>([](const Thr& thr) {
++            auto r = thr_to_anf(thr);
++            return is_ok(r) || error(r).code != ErrorCode::NotImplemented;
++        }),
++        {8, 12, 16});
++}
++
++TEST_CASE("thr_to_tt_openmp_scaling", "[thr][benchmark]") {
++    run_openmp_bench_from_thr(
++        "thr_to_tt",
++        std::function<void(const Thr&)>([](const Thr& thr) { (void)thr_to_tt(thr); }),
++        std::function<bool(const Thr&)>([](const Thr& thr) {
++            auto r = thr_to_tt(thr);
++            return is_ok(r) || error(r).code != ErrorCode::NotImplemented;
++        }),
++        {8, 12, 16});
++}
+diff --git a/verify/reference_builders.cpp b/verify/reference_builders.cpp
+index 4441c40..0358aab 100644
+--- a/verify/reference_builders.cpp
++++ b/verify/reference_builders.cpp
+@@ -110,17 +110,37 @@ std::vector<Thr> growing_threshold_test_functions(uint32_t max_n) {
+         // Majority (нечётный n): веса 1, theta = ceil(n/2).
+         if (n % 2 == 1) out.push_back(Thr(std::vector<int64_t>(n, 1), (n + 1) / 2));
+         // Взвешенная пороговая функция со случайными весами/порогом —
+-        // детерминированный seed для воспроизводимости CI.
++        // детерминированный seed для воспроизводимости CI. theta сэмплируется
++        // из ДОСТИЖИМОГО диапазона суммы sum(w_i*x_i) для x_i in {0,1} — это
++        // [сумма отрицательных весов, сумма положительных весов], а не
++        // [-sum(w_i), sum(w_i)]: знаковая сумма весов может быть отрицательной
++        // и вообще не иметь отношения к достижимым значениям при смешанных
++        // знаках весов (так было раньше — приводило к a>b в
++        // uniform_int_distribution, UB, и вырождению функции в константу).
+         std::mt19937 rng(4242 + n);
+         std::uniform_int_distribution<int64_t> weight_dist(-5, 5);
+         std::vector<int64_t> weights(n);
+-        int64_t sum = 0;
++        int64_t min_sum = 0, max_sum = 0;  // достижимые границы sum(w_i*x_i)
+         for (auto& w : weights) {
+             w = weight_dist(rng);
+-            sum += w;
++            if (w > 0) {
++                max_sum += w;
++            } else {
++                min_sum += w;
++            }
+         }
+-        std::uniform_int_distribution<int64_t> theta_dist(-sum, sum);
+-        out.push_back(Thr(weights, theta_dist(rng)));
++        int64_t theta;
++        if (max_sum > min_sum) {
++            // theta в (min_sum, max_sum] гарантирует не-константу: точка,
++            // дающая min_sum, точно даёт FALSE, точка max_sum — точно TRUE.
++            std::uniform_int_distribution<int64_t> theta_dist(min_sum + 1, max_sum);
++            theta = theta_dist(rng);
++        } else {
++            // Все веса равны 0 (min_sum == max_sum == 0) — функция неизбежно
++            // константа независимо от theta; выбираем константу FALSE.
++            theta = 1;
++        }
++        out.push_back(Thr(weights, theta));
+     }
+     return out;
+ }

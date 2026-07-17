@@ -294,6 +294,7 @@ target_link_libraries(test_core PRIVATE bmm_core bmm_verify Catch2::Catch2)
 # распространяется транзитивно на test_aig/test_anf, поэтому линкуем явно.
 target_link_libraries(test_aig PRIVATE TBB::tbb)
 target_link_libraries(test_anf PRIVATE TBB::tbb)
+target_link_libraries(test_thr PRIVATE OpenMP::OpenMP_CXX)
 
 include(CTest)
 include(Catch)
