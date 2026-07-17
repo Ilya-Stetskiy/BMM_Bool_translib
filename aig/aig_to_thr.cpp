@@ -99,8 +99,8 @@ Result<Thr> aig_to_thr(const Aig& aig) {
 
     const double infinity = solver->infinity();
 
-    // Create variables w_0..w_{n-1} and theta (bounds: [-100000.0, 100000.0], integer)
-    const double max_val = 100000.0;
+    // Create variables w_0..w_{n-1} and theta (bounds: [-1000.0, 1000.0], integer)
+    const double max_val = 1000.0;
     std::vector<operations_research::MPVariable*> w(n);
     for (uint32_t i = 0; i < n; ++i) {
         w[i] = solver->MakeIntVar(-max_val, max_val, "w_" + std::to_string(i));
@@ -133,17 +133,13 @@ Result<Thr> aig_to_thr(const Aig& aig) {
     if (result_status == operations_research::MPSolver::OPTIMAL ||
         result_status == operations_research::MPSolver::FEASIBLE) {
         std::vector<int64_t> weights(n);
-        std::cout << "[aig_to_thr DEBUG] SOLVED: theta = " << theta->solution_value() << ", weights =";
         for (uint32_t i = 0; i < n; ++i) {
             weights[i] = static_cast<int64_t>(std::round(w[i]->solution_value()));
-            std::cout << " " << w[i]->solution_value();
         }
-        std::cout << std::endl;
         int64_t theta_val = static_cast<int64_t>(std::round(theta->solution_value()));
         return ok<Thr>(Thr(std::move(weights), theta_val));
     }
 
-    std::cout << "[aig_to_thr DEBUG] FAILED to solve. Status: " << result_status << std::endl;
     return fail<Thr>(ErrorCode::Unsupported, "aig_to_thr: функция не является пороговой");
 }
 

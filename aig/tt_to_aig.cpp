@@ -122,8 +122,8 @@ Result<Aig> tt_to_aig(const TruthTable& tt) {
 
         mockturtle::aig_network::signal lo_signal, hi_signal;
 
-        // Parallelize only if var_idx is high to prevent excessive TBB nesting and deadlock
-        if (var_idx >= 5) {
+        // Parallelize only at upper levels to reduce TBB task creation overhead and prevent scheduler exhaustion
+        if (var_idx >= 12) {
             tbb::task_group tg;
             tg.run([&] { lo_signal = build_aig_rec(tt_lo, split_var); });
             hi_signal = build_aig_rec(tt_hi, split_var);
@@ -149,4 +149,4 @@ Result<Aig> tt_to_aig(const TruthTable& tt) {
     return ok<Aig>(Aig(std::move(net)));
 }
 
-}  // namespace bmm
+} // namespace bmm
