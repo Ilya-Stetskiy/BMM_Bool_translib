@@ -23,6 +23,13 @@ using namespace bmm::verify;
 
 namespace {
 
+// Локальный потолок ТОЛЬКО для этого файла, отдельно от глобального
+// kMaxGroundTruthVars=16 (тот задаёт глубину проверки настоящих 20 функций
+// трансляции через run_translation_tests() и его трогать не стоит --
+// ослабило бы проверку реальных студенческих реализаций). Здесь же просто
+// перебор точек .to_tt(), исчерпывающий даже на n=8, и намного быстрее.
+constexpr uint32_t kTestCoreMaxVars = 8;
+
 // Прямая проверка X::to_tt() против ground truth (не через
 // run_translation_tests — тот тестирует функции трансляции, не .to_tt()).
 template <Representation Repr>
@@ -46,7 +53,7 @@ TEST_CASE("Aig::to_tt", "[core]") {
     // MUX-дерево) — за пределом build_source возвращает TooManyVariables,
     // такие случаи пропускаем, не считаем FAIL (та же логика, что и в
     // run_translation_tests для build_source).
-    for (const auto& gt : growing_test_functions(kMaxGroundTruthVars)) {
+    for (const auto& gt : growing_test_functions(kTestCoreMaxVars)) {
         auto built = reference_aig(gt);
         if (!is_ok(built)) continue;
         check_to_tt("Aig", value(built), gt);
@@ -54,19 +61,19 @@ TEST_CASE("Aig::to_tt", "[core]") {
 }
 
 TEST_CASE("Bdd::to_tt", "[core]") {
-    for (const auto& gt : growing_test_functions(kMaxGroundTruthVars)) {
+    for (const auto& gt : growing_test_functions(kTestCoreMaxVars)) {
         check_to_tt("Bdd", value(reference_bdd(gt)), gt);
     }
 }
 
 TEST_CASE("Anf::to_tt", "[core]") {
-    for (const auto& gt : growing_test_functions(kMaxGroundTruthVars)) {
+    for (const auto& gt : growing_test_functions(kTestCoreMaxVars)) {
         check_to_tt("Anf", value(reference_anf(gt)), gt);
     }
 }
 
 TEST_CASE("Thr::to_tt", "[core]") {
-    for (const auto& thr : growing_threshold_test_functions(kMaxGroundTruthVars)) {
+    for (const auto& thr : growing_threshold_test_functions(kTestCoreMaxVars)) {
         const auto gt = ground_truth_from_thr(thr, "thr_n" + std::to_string(thr.n_vars()));
         check_to_tt("Thr", thr, gt);
     }
