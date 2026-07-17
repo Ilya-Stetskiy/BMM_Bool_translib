@@ -286,7 +286,8 @@ bmm_add_test_executable(test_aig bmm_aig aig/test_aig.cpp)
 bmm_add_test_executable(test_bdd bmm_bdd bdd/test_bdd.cpp)
 bmm_add_test_executable(test_anf bmm_anf anf/test_anf.cpp)
 bmm_add_test_executable(test_thr bmm_thr thr/test_thr.cpp)
-
+add_executable(test_core core/test_core.cpp verify/sat_encoding/test_sat_encoding.cpp)
+target_link_libraries(test_core PRIVATE bmm_core bmm_verify Catch2::Catch2)
 # test_aig/test_anf сами используют oneapi::tbb::global_control в секциях
 # "*_tbb_scaling" (см. benchmarks/tbb_scaling.hpp, добавлено во второй
 # итерации задания) — bmm_aig/bmm_anf линкуют TBB::tbb как PRIVATE, это не
@@ -300,6 +301,7 @@ catch_discover_tests(test_aig)
 catch_discover_tests(test_bdd)
 catch_discover_tests(test_anf)
 catch_discover_tests(test_thr)
+catch_discover_tests(test_core)
 
 # ---------------------------------------------------------------------------
 # status — прогоняет все 4 тестовых бинаря + bmm_config_dump, генерирует
