@@ -19,7 +19,6 @@ std::vector<uint32_t> monomial_to_vector(
 {
     std::vector<uint32_t> result;
 
-
     for (auto it = mono.begin();
          it != mono.end();
          ++it)
@@ -27,23 +26,12 @@ std::vector<uint32_t> monomial_to_vector(
         result.push_back(static_cast<uint32_t>(*it));
     }
 
-
     return result;
 }
 
 
-
 // ------------------------------------------------------------
 // Построение AND дерева для одного монома
-//
-// x0*x2*x5:
-//
-//          AND
-//         /   \
-//       AND    x5
-//      /   \
-//    x0     x2
-//
 // ------------------------------------------------------------
 
 Signal build_monomial(
@@ -51,8 +39,6 @@ Signal build_monomial(
         const std::vector<uint32_t>& mono,
         const std::vector<Signal>& vars)
 {
-
-    // константа 1
     if (mono.empty())
     {
         return aig.get_constant(true);
@@ -61,20 +47,15 @@ Signal build_monomial(
 
     std::vector<Signal> nodes;
 
-
     for (uint32_t v : mono)
     {
         nodes.push_back(vars[v]);
     }
 
 
-
-    // балансированное AND дерево
-
     while (nodes.size() > 1)
     {
         std::vector<Signal> next;
-
 
         for (size_t i = 0; i < nodes.size(); i += 2)
         {
@@ -93,25 +74,15 @@ Signal build_monomial(
             }
         }
 
-
         nodes.swap(next);
     }
-
 
     return nodes[0];
 }
 
 
-
 // ------------------------------------------------------------
-// XOR через AIG:
-//
-// a XOR b
-//
-// = (a & !b) | (!a & b)
-//
-// = !( !(a&!b) & !(!a&b) )
-//
+// XOR через AIG
 // ------------------------------------------------------------
 
 Signal xor_aig(
@@ -119,7 +90,6 @@ Signal xor_aig(
         Signal a,
         Signal b)
 {
-
     auto t1 =
         aig.create_and(
             a,
@@ -142,25 +112,14 @@ Signal xor_aig(
 }
 
 
-
 // ------------------------------------------------------------
-// XOR редукция дерева:
-//
-// m1 xor m2 xor m3 xor m4
-//
-//        xor
-//       /   \
-//     xor   xor
-//    / \    / \
-//   m1 m2 m3 m4
-//
+// XOR редукция дерева
 // ------------------------------------------------------------
 
 Signal xor_reduce(
         mockturtle::aig_network& aig,
         std::vector<Signal> nodes)
 {
-
     if (nodes.empty())
     {
         return aig.get_constant(false);
@@ -174,7 +133,6 @@ Signal xor_reduce(
 
         for (size_t i = 0; i < nodes.size(); i += 2)
         {
-
             if (i + 1 < nodes.size())
             {
                 next.push_back(
@@ -190,7 +148,6 @@ Signal xor_reduce(
                 next.push_back(nodes[i]);
             }
         }
-
 
         nodes.swap(next);
     }
@@ -212,10 +169,7 @@ Result<Aig> anf_to_aig(const Anf& anf)
     mockturtle::aig_network aig;
 
 
-
-    // --------------------------------------------------------
-    // 1. Создаем входные переменные
-    // --------------------------------------------------------
+    // Создаем входные переменные
 
     std::vector<Signal> vars;
 
@@ -231,25 +185,14 @@ Result<Aig> anf_to_aig(const Anf& anf)
 
 
 
-    // --------------------------------------------------------
-    // 2. Каждый моном ANF -> AND
-    // --------------------------------------------------------
+    // Каждый моном ANF -> AND
 
     std::vector<Signal> terms;
-
 
 
 #if BMM_HAVE_BRIAL
 
     const auto& poly = anf.raw();
-
-    std::cerr << "n_vars = "
-              << anf.n_vars()
-              << "\n";
-
-
-    std::cerr << "ANF polynomial:\n";
-    std::cerr << poly << "\n";
 
 
     for (auto it = poly.begin();
@@ -259,20 +202,6 @@ Result<Aig> anf_to_aig(const Anf& anf)
         auto mono = monomial_to_vector(*it);
 
 
-        std::cerr << "MONO SIZE = "
-                  << mono.size()
-                  << "\n";
-
-
-        for(auto x : mono)
-        {
-            std::cerr << x << " ";
-        }
-
-        std::cerr << "\n";
-
-
-        // ВАЖНО: вот этого у тебя сейчас нет
         terms.push_back(
             build_monomial(
                 aig,
@@ -281,11 +210,6 @@ Result<Aig> anf_to_aig(const Anf& anf)
             )
         );
     }
-
-
-    std::cerr << "terms count = "
-              << terms.size()
-              << "\n";
 
 
 #else
@@ -305,9 +229,7 @@ Result<Aig> anf_to_aig(const Anf& anf)
 
 
 
-    // --------------------------------------------------------
-    // 3. XOR всех мономов
-    // --------------------------------------------------------
+    // XOR всех мономов
 
     Signal result =
         xor_reduce(
@@ -317,12 +239,9 @@ Result<Aig> anf_to_aig(const Anf& anf)
 
 
 
-    // --------------------------------------------------------
-    // 4. Один выход
-    // --------------------------------------------------------
+    // Один выход
 
     aig.create_po(result);
-
 
 
     return ok<Aig>(
