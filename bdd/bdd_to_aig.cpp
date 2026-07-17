@@ -4,37 +4,17 @@
 #include <sylvan_obj.hpp>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <stdexcept>
 
 namespace bmm {
 
 constexpr uint64_t COMP_BIT = 0x8000000000000000ULL;
 
-// Выделенная inline-функция для работы с комплементными рёбрами
-inline mockturtle::aig_network::signal
-lookup_signal(
-    const sylvan::Bdd& node,
-    mockturtle::aig_network& aig,
-    const std::unordered_map<uint64_t, mockturtle::aig_network::signal>& cache)
-{
-    const uint64_t raw = node.GetBDD();
-    const bool comp = (raw & COMP_BIT) != 0;
-    const sylvan::Bdd reg(raw & ~COMP_BIT);
-
-    mockturtle::aig_network::signal s =
-        reg.isZero()
-            ? aig.get_constant(false)
-            : reg.isOne()
-                ? aig.get_constant(true)
-                : cache.at(reg.GetBDD());
-
-    return comp ? !s : s;
-}
-
-// Кадр стека для итеративного DFS
+// Кадр стека для имитации рекурсивного вызова
 struct Frame {
     sylvan::Bdd node;
-    uint8_t stage;  // 0 = вход, 1 = выход (оба ребёнка готовы)
+    bool expanded; // false = первый визит, true = дети обработаны, пора строить
 };
 
 Result<Aig> bdd_to_aig(const Bdd& f) {
@@ -44,7 +24,7 @@ Result<Aig> bdd_to_aig(const Bdd& f) {
         mockturtle::aig_network aig;
         const uint32_t num_vars = f.n_vars();
 
-        // Создаём Primary Inputs заранее (для единообразия интерфейса)
+        // Создаём Primary Inputs заранее
         std::vector<mockturtle::aig_network::signal> pis(num_vars);
         for (uint32_t i = 0; i < num_vars; ++i) {
             pis[i] = aig.create_pi();
@@ -62,83 +42,107 @@ Result<Aig> bdd_to_aig(const Bdd& f) {
             return ok(Aig(std::move(aig)));
         }
 
-        const uint64_t f_raw = f_syl.GetBDD();
-        const uint64_t f_reg_raw = f_raw & ~COMP_BIT;
-        const bool f_is_comp = (f_raw & COMP_BIT) != 0;
-
-        // Оценка размера для предвыделения памяти
         const size_t dag_size = std::max<size_t>(f_syl.NodeCount(), 64);
 
-        // Кэш с предвыделением памяти
+        // Кэш: regular_id -> signal (также служит маркером состояния "Built")
         std::unordered_map<uint64_t, mockturtle::aig_network::signal> cache;
         cache.reserve(dag_size);
-        
-        // Стек кадров для итеративного DFS
+
+        // Expanded: regular_id (маркер состояния "Gray" / "в стеке")
+        std::unordered_set<uint64_t> expanded;
+        expanded.reserve(dag_size);
+
         std::vector<Frame> stack;
         stack.reserve(dag_size * 2);
 
-        stack.push_back({sylvan::Bdd(f_reg_raw), 0});
+        const uint64_t f_reg_raw = f_syl.GetBDD() & ~COMP_BIT;
+        const bool f_is_comp = (f_syl.GetBDD() & COMP_BIT) != 0;
 
-        // Итеративный DFS с кадрами
+        stack.push_back({sylvan::Bdd(f_reg_raw), false});
+
+        // Однопроходный итеративный DFS
         while (!stack.empty()) {
-            auto [curr, stage] = stack.back();
+            Frame frame = std::move(stack.back());
             stack.pop_back();
 
-            const uint64_t curr_raw = curr.GetBDD();
-            const uint64_t curr_reg_raw = curr_raw & ~COMP_BIT;
+            const uint64_t raw = frame.node.GetBDD();
+            const uint64_t reg_raw = raw & ~COMP_BIT;
+            const bool is_comp = (raw & COMP_BIT) != 0;
 
-            // Stage 1: оба ребёнка готовы, строим ITE
-            if (stage == 1) {
-                const uint32_t var_idx = curr.TopVar();
+            if (frame.expanded) {
+                // ЭТАП 2: Дети гарантированно уже обработаны и лежат в cache.
+                const uint32_t var_idx = frame.node.TopVar();
                 if (var_idx >= num_vars) {
                     return fail<Aig>(ErrorCode::InvalidArgument, "bdd_to_aig: индекс BDD превышает n_vars()");
                 }
-                
+
                 const auto x_sig = pis[var_idx];
-                const auto hi_sig = lookup_signal(curr.Then(), aig, cache);
-                const auto lo_sig = lookup_signal(curr.Else(), aig, cache);
-                
+
+                // Лямбда для чистого получения сигнала ребёнка
+                auto get_sig = [&](const sylvan::Bdd& child) {
+                    const uint64_t c_raw = child.GetBDD();
+                    const bool c_comp = (c_raw & COMP_BIT) != 0;
+                    const uint64_t c_reg = c_raw & ~COMP_BIT;
+
+                    mockturtle::aig_network::signal s;
+                    const sylvan::Bdd c_reg_node(c_reg);
+                    
+                    if (c_reg_node.isZero()) {
+                        s = aig.get_constant(false);
+                    } else if (c_reg_node.isOne()) {
+                        s = aig.get_constant(true);
+                    } else {
+                        s = cache.at(c_reg); // Гарантированно есть, так как мы в post-order
+                    }
+                    return c_comp ? !s : s;
+                };
+
+                const auto hi_sig = get_sig(frame.node.Then());
+                const auto lo_sig = get_sig(frame.node.Else());
+
                 const auto ite_sig = aig.create_ite(x_sig, hi_sig, lo_sig);
                 
-                cache.try_emplace(curr_reg_raw, ite_sig);
-                continue;
-            }
+                // Помечаем как Built, добавляя в кэш
+                cache.try_emplace(reg_raw, ite_sig);
 
-            // Stage 0: вход в узел
-            // Проверяем, уже ли обработан
-            if (cache.count(curr_reg_raw)) {
-                continue;
-            }
-
-            const sylvan::Bdd T = curr.Then();
-            const sylvan::Bdd E = curr.Else();
-            
-            const uint64_t T_reg_raw = T.GetBDD() & ~COMP_BIT;
-            const uint64_t E_reg_raw = E.GetBDD() & ~COMP_BIT;
-
-            // Проверяем готовность детей
-            const bool T_ready = T.isZero() || T.isOne() || cache.count(T_reg_raw);
-            const bool E_ready = E.isZero() || E.isOne() || cache.count(E_reg_raw);
-
-            if (T_ready && E_ready) {
-                // Оба ребёнка готовы, сразу переходим к stage 1
-                stack.push_back({curr, 1});
             } else {
-                // Пушим текущий узел с stage 1 (выйдет после детей)
-                stack.push_back({curr, 1});
+                // ЭТАП 1: Первый визит в узел
                 
-                // Пушим непосещённых детей с stage 0
-                if (!T_ready) {
-                    stack.push_back({sylvan::Bdd(T_reg_raw), 0});
+                // Если уже Built (есть в кэше) или уже в стеке (Expanded), пропускаем
+                if (cache.count(reg_raw) || expanded.count(reg_raw)) {
+                    continue;
                 }
-                if (!E_ready) {
-                    stack.push_back({sylvan::Bdd(E_reg_raw), 0});
+
+                // Помечаем как Expanded (Gray)
+                expanded.insert(reg_raw);
+
+                // Сначала кладем в стек задачу на построение этого узла (после детей)
+                stack.push_back({frame.node, true});
+
+                // Затем кладем детей (они будут обработаны первыми, LIFO)
+                const sylvan::Bdd T = frame.node.Then();
+                const sylvan::Bdd E = frame.node.Else();
+
+                const uint64_t T_reg = T.GetBDD() & ~COMP_BIT;
+                const uint64_t E_reg = E.GetBDD() & ~COMP_BIT;
+
+                // Кладем в стек только нетерминальные узлы, которые еще не Built и не Expanded
+                if (!T.isZero() && !T.isOne() && !cache.count(T_reg) && !expanded.count(T_reg)) {
+                    stack.push_back({sylvan::Bdd(T_reg), false});
+                }
+                if (!E.isZero() && !E.isOne() && !cache.count(E_reg) && !expanded.count(E_reg)) {
+                    stack.push_back({sylvan::Bdd(E_reg), false});
                 }
             }
         }
 
-        // Подключаем корень с учётом комплемент-бита
-        mockturtle::aig_network::signal root_sig = cache.at(f_reg_raw);
+        // Извлекаем сигнал корня
+        auto root_it = cache.find(f_reg_raw);
+        if (root_it == cache.end()) {
+            return fail<Aig>(ErrorCode::InvalidArgument, "bdd_to_aig: внутренняя ошибка, корень не найден");
+        }
+        
+        mockturtle::aig_network::signal root_sig = root_it->second;
         if (f_is_comp) root_sig = !root_sig;
 
         aig.create_po(root_sig);
