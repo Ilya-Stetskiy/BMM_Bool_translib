@@ -5,6 +5,7 @@
 #include <vector>
 #include <cstdint>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace bmm {
 
@@ -95,52 +96,114 @@ public:
 struct BddSerializer {
     std::vector<BddFlatNode> nodes;  // nodes[0] — фиктивный терминал
     FastBddMap cache;
-    int n;  // Число переменных (для проверки level < n)
+    uint32_t n;  // Число переменных (для проверки level < n)
 
-    BddSerializer(size_t estimated, int n_vars)
+    BddSerializer(size_t estimated, uint32_t n_vars)
         : cache(estimated), n(n_vars) {
         nodes.reserve(estimated);
         nodes.push_back({0xFFFF, 0, 0, 0});  // Узел 0: терминал
     }
 
-    uint32_t serialize(sylvan::Bdd node) {
-        sylvan::BDD raw = node.GetBDD();
+    // ИЗМЕНЕНО: было рекурсивным (serialize вызывал сам себя для
+    // node.Then()/node.Else()). Контракт проекта требует итеративного
+    // обхода с явным стеком именно из-за риска переполнения стека на
+    // глубоких BDD (см. bdd_to_aig.cpp и CONVENTIONS.md). Глубина здесь и
+    // так ограничена kMaxTruthTableVars (проверяется в bdd_to_tt() до
+    // вызова serialize()), поэтому падение по стеку было маловероятно на
+    // практике — но только благодаря этому внешнему, специфичному для TT
+    // ограничению; было бы небезопасно, если BddSerializer когда-нибудь
+    // переиспользуют в контексте без такого потолка на n. Ниже — тот же
+    // итеративный post-order паттерн, что и в bdd_to_aig.cpp, адаптированный
+    // под плоский формат BddFlatNode и FastBddMap вместо unordered_map.
+    uint32_t serialize(sylvan::Bdd root) {
+        sylvan::BDD root_raw = root.GetBDD();
 
-        // Терминал: ID = 0, complement-бит = is_comp
-        if (node.isTerminal()) {
-            return (0u << 1) | (sylvan_is_comp(raw) ? 1u : 0u);
+        // Корень тоже может оказаться терминалом, если вызвать serialize()
+        // напрямую, минуя быстрый путь в bdd_to_tt().
+        if (root.isTerminal()) {
+            return (0u << 1) | (sylvan_is_comp(root_raw) ? 1u : 0u);
         }
 
-        // Регуляризуем для хэширования
-        sylvan::BDD reg_raw = sylvan_regular(raw);
+        sylvan::BDD root_reg = sylvan_regular(root_raw);
 
-        // Уже сериализован?
-        uint32_t existing = cache.get(reg_raw);
-        if (existing != 0) {
-            return (existing << 1) | (sylvan_is_comp(raw) ? 1u : 0u);
+        std::vector<sylvan::Bdd> stack;
+        std::unordered_set<sylvan::BDD> seen;
+        stack.reserve(nodes.capacity());
+        seen.reserve(nodes.capacity());
+
+        stack.push_back(root);
+        seen.insert(root_reg);
+
+        // Возвращает упакованное ребро (id<<1 | complement) для уже
+        // готового (терминального либо ранее сериализованного) узла.
+        auto edge_of = [&](const sylvan::Bdd& child) -> uint32_t {
+            sylvan::BDD craw = child.GetBDD();
+            if (child.isTerminal()) {
+                return (0u << 1) | (sylvan_is_comp(craw) ? 1u : 0u);
+            }
+            sylvan::BDD creg = sylvan_regular(craw);
+            uint32_t id = cache.get(creg);
+            if (id == 0u) {
+                throw std::runtime_error(
+                    "BddSerializer::serialize: узел не найден в кэше при "
+                    "топологической сборке (нарушен инвариант post-order обхода)");
+            }
+            return (id << 1) | (sylvan_is_comp(craw) ? 1u : 0u);
+        };
+
+        while (!stack.empty()) {
+            sylvan::Bdd node = stack.back();
+            sylvan::BDD raw = node.GetBDD();
+            sylvan::BDD reg = sylvan_regular(raw);
+
+            // Уже полностью сериализован — просто убираем со стека.
+            if (cache.get(reg) != 0u) {
+                stack.pop_back();
+                continue;
+            }
+
+            sylvan::Bdd T = node.Then();
+            sylvan::Bdd E = node.Else();
+
+            sylvan::BDD T_reg = sylvan_regular(T.GetBDD());
+            sylvan::BDD E_reg = sylvan_regular(E.GetBDD());
+
+            bool T_ready = T.isTerminal() || cache.get(T_reg) != 0u;
+            bool E_ready = E.isTerminal() || cache.get(E_reg) != 0u;
+
+            if (T_ready && E_ready) {
+                uint32_t var_idx = node.TopVar();
+                if (var_idx >= n) {
+                    throw std::runtime_error("BDD variable level out of range");
+                }
+
+                uint32_t new_id = static_cast<uint32_t>(nodes.size());
+                nodes.push_back({
+                    static_cast<uint16_t>(var_idx),
+                    0,
+                    edge_of(T),
+                    edge_of(E)
+                });
+
+                cache.set(reg, new_id);
+                stack.pop_back();
+            } else {
+                // Проверка 'seen' перед push — не даёт одному и тому же узлу
+                // попасть в стек дважды, пока он не досчитан (иначе на
+                // сильно шаренных DAG возможен квадратичный рост числа
+                // обращений — тот же паттерн, что и в bdd_to_aig.cpp).
+                if (!T_ready && !seen.count(T_reg)) {
+                    seen.insert(T_reg);
+                    stack.push_back(T);
+                }
+                if (!E_ready && !seen.count(E_reg)) {
+                    seen.insert(E_reg);
+                    stack.push_back(E);
+                }
+            }
         }
 
-        // Рекурсивная сериализация детей (DFS)
-        uint32_t high_child = serialize(node.Then());
-        uint32_t low_child = serialize(node.Else());
-
-        // Уровень переменной (в Sylvan TopVar() = индекс переменной = уровень)
-        uint32_t var_idx = node.TopVar();
-
-        if (var_idx >= static_cast<uint32_t>(n)) {
-            throw std::runtime_error("BDD variable level out of range");
-        }
-
-        uint32_t new_id = static_cast<uint32_t>(nodes.size());
-        nodes.push_back({
-            static_cast<uint16_t>(var_idx),
-            0,  // padding
-            high_child,
-            low_child
-        });
-
-        cache.set(reg_raw, new_id);
-        return (new_id << 1) | (sylvan_is_comp(raw) ? 1u : 0u);
+        return edge_of(root);
     }
 };
 
@@ -170,15 +233,18 @@ inline bool evaluate_minterm(
 Result<TruthTable> bdd_to_tt(const Bdd& f) {
     ZoneScoped;
 
-    uint32_t n = f.n_vars();
-
-    // Контракт: TT только до kMaxTruthTableVars переменных
-    if (n > kMaxTruthTableVars) {
-        return fail<TruthTable>(ErrorCode::TooManyVariables,
-            "bdd_to_tt: n > " + std::to_string(kMaxTruthTableVars));
-    }
-
+    // ИЗМЕНЕНО: n_vars() и проверка лимита переменных перенесены внутрь
+    // try — контракт требует оборачивать в try всё тело функции, а не
+    // только часть после проверки kMaxTruthTableVars.
     try {
+        uint32_t n = f.n_vars();
+
+        // Контракт: TT только до kMaxTruthTableVars переменных
+        if (n > kMaxTruthTableVars) {
+            return fail<TruthTable>(ErrorCode::TooManyVariables,
+                "bdd_to_tt: n > " + std::to_string(kMaxTruthTableVars));
+        }
+
         sylvan::Bdd f_syl = f.raw();
 
         // Быстрый путь для констант
@@ -221,7 +287,14 @@ Result<TruthTable> bdd_to_tt(const Bdd& f) {
         return fail<TruthTable>(ErrorCode::OutOfMemory,
             "bdd_to_tt: исчерпана память при построении TT");
     } catch (const std::exception& e) {
-        return fail<TruthTable>(ErrorCode::Unsupported,
+        // ИЗМЕНЕНО: ErrorCode::InternalError вместо ErrorCode::Unsupported.
+        // Это исключение сигнализирует о нарушенном внутреннем инварианте
+        // (испорченный BDD, рассинхрон var_idx/уровней, повреждённая
+        // FastBddMap), а не о заведомо неподдерживаемом, но легитимном
+        // случае. Если тест-раннер трактует Unsupported так же мягко, как
+        // NotImplemented (SKIP, а не FAIL) — реальный баг рисковал остаться
+        // незамеченным под видом "не поддерживается".
+        return fail<TruthTable>(ErrorCode::InternalError,
             std::string("bdd_to_tt internal error: ") + e.what());
     }
 }
