@@ -2,6 +2,7 @@
 
 #include <tracy/Tracy.hpp>
 #include <sylvan_obj.hpp>
+
 #include <vector>
 #include <algorithm>
 #include <cstdint>
@@ -14,75 +15,160 @@
 
 namespace bmm {
 
-Result<TruthTable> bdd_to_tt(const Bdd& f) {
+namespace {
+
+uint64_t mask_bits(unsigned n)
+{
+    if (n == 64)
+        return ~uint64_t{0};
+
+    return (uint64_t{1} << n) - 1;
+}
+
+/**
+ * Высокооптимизированное блочное заполнение таблицы истинности.
+ * Группирует свободные (don't care) биты в непрерывные диапазоны памяти
+ * для максимального кэш-эффекта и автовекторизации компилятором.
+ */
+void fill_masked(
+    uint64_t* bits,
+    uint64_t fixed_mask,
+    uint64_t fixed_vals,
+    uint32_t n)
+{
+    if (n < 6) {
+        // Все переменные умещаются внутри одного 64-битного машинного слова
+        uint64_t word_mask = 0;
+        uint64_t free_mask = mask_bits(n) & ~fixed_mask;
+        uint64_t sub = 0;
+        do {
+            word_mask |= (1ULL << (fixed_vals | sub));
+            sub = (sub - free_mask) & free_mask;
+        } while (sub != 0);
+
+        bits[0] |= word_mask;
+    } else {
+        // Разделяем биты на внутрисловные (0-5) и межсловные (>=6)
+        uint64_t low_mask = fixed_mask & 0x3F;
+        uint64_t low_vals = fixed_vals & 0x3F;
+        uint64_t high_mask = fixed_mask >> 6;
+        uint64_t high_vals = fixed_vals >> 6;
+        uint64_t high_limit = uint64_t{1} << (n - 6);
+
+        // 1. Формируем 64-битную маску паттерна внутри одного слова
+        uint64_t word_mask = 0;
+        uint64_t free_low = 0x3F & ~low_mask;
+        uint64_t sub_low = 0;
+        do {
+            word_mask |= (1ULL << (low_vals | sub_low));
+            sub_low = (sub_low - free_low) & free_low;
+        } while (sub_low != 0);
+
+        // 2. Определяем свободные биты среди индексов слов
+        uint64_t free_high = (high_limit - 1) & ~high_mask;
+
+        // Находим размер МАКСИМАЛЬНОГО непрерывного блока слов (bitwise-трюк)
+        uint64_t block_size = (~free_high) & (free_high + 1);
+        if (block_size > high_limit) {
+            block_size = high_limit;
+        }
+
+        // Выделяем оставшиеся (разреженные) свободные биты старших уровней
+        uint64_t rest_free_high = free_high & ~(block_size - 1);
+        uint64_t sub_high = 0;
+
+        // Плотный цикл по непрерывным блокам — идеален для кэша процессора
+        do {
+            uint64_t start_w = high_vals | sub_high;
+            
+            // Этот участок компилятор разворачивает в SIMD/векторные инструкции записи
+            for (uint64_t w = 0; w < block_size; ++w) {
+                bits[start_w + w] |= word_mask;
+            }
+
+            sub_high = (sub_high - rest_free_high) & rest_free_high;
+        } while (sub_high != 0);
+    }
+}
+
+}
+
+Result<TruthTable> bdd_to_tt(const Bdd& f)
+{
     ZoneScoped;
 
     try {
-        const uint32_t n = f.n_vars();
-        if (n > kMaxTruthTableVars) {
-            return fail<TruthTable>(ErrorCode::TooManyVariables,
-                "bdd_to_tt: n > " + std::to_string(kMaxTruthTableVars));
+        uint32_t n = f.n_vars();
+
+        if (n > kMaxTruthTableVars)
+        {
+            return fail<TruthTable>(
+                ErrorCode::TooManyVariables,
+                "bdd_to_tt: too many vars");
         }
 
-        sylvan::Bdd f_syl = f.raw();
         TruthTable tt(n);
-        
-        if (f_syl.isZero()) return ok(std::move(tt));
 
-        // Прямой доступ к памяти kitty::dynamic_truth_table
+        if (f.raw().isZero())
+            return ok(std::move(tt));
+
         uint64_t* data = tt.raw()._bits.data();
 
-        // Фрейм хранит узел BDD, битовую маску зафиксированных переменных
-        // и их конкретное значение для текущего пути.
+        // Кадр стека хранит только состояние для РЕАЛЬНЫХ узлов BDD
         struct Frame {
             sylvan::Bdd node;
-            uint64_t mask;
-            uint64_t value;
+            uint64_t fixed_mask; // Маска жестко зафиксированных переменных
+            uint64_t fixed_vals; // Конкретные значения этих переменных
         };
 
         std::vector<Frame> stack;
-        stack.reserve(64); 
-        stack.push_back(Frame{ f_syl, 0, 0 });
+        stack.reserve(n * 2); // Заранее аллоцируем память, чтобы избежать реаллокаций стека
+        stack.push_back({ f.raw(), 0, 0 });
 
-        const uint64_t universe = (n >= 64) ? ~uint64_t{0} : ((uint64_t{1} << n) - 1);
-
-        while (!stack.empty()) {
-            Frame curr = std::move(stack.back());
+        while (!stack.empty())
+        {
+            Frame cur = std::move(stack.back());
             stack.pop_back();
 
-            if (curr.node.isZero()) continue;
+            if (cur.node.isZero())
+                continue;
 
-            if (curr.node.isOne()) {
-                // Если мы дошли до One, все переменные, которые не попали в mask, 
-                // могут быть любыми (don't cares). Итерируемся по всем их комбинациям.
-                const uint64_t floating = (~curr.mask) & universe;
-                uint64_t sub = floating;
-                
-                do {
-                    uint64_t idx = curr.value | sub;
-                    data[idx >> 6] |= (uint64_t{1} << (idx & 63));
-                    sub = (sub - 1) & floating;
-                } while (sub != floating);
-                
+            // Дошли до терминала 1 -> делаем быструю многомерную диапазонную заливку
+            if (cur.node.isOne())
+            {
+                fill_masked(data, cur.fixed_mask, cur.fixed_vals, n);
                 continue;
             }
 
-            const uint32_t v = curr.node.TopVar();
-            BMM_ASSERT(v < n && "BDD variable index out of bounds");
-            
-            // Ветвь Else (переменная v = 0)
-            stack.push_back(Frame{ curr.node.Else(), curr.mask | (uint64_t{1} << v), curr.value });
-            
-            // Ветвь Then (переменная v = 1)
-            stack.push_back(Frame{ curr.node.Then(), curr.mask | (uint64_t{1} << v), curr.value | (uint64_t{1} << v) });
+            uint32_t var = cur.node.TopVar();
+            BMM_ASSERT(var < n);
+
+            uint64_t bit = 1ULL << var;
+
+            // Ветка Else (переменная на уровне var равна 0)
+            stack.push_back({
+                cur.node.Else(),
+                cur.fixed_mask | bit,
+                cur.fixed_vals // бит var остается нулевым
+            });
+
+            // Ветка Then (переменная на уровне var равна 1)
+            stack.push_back({
+                cur.node.Then(),
+                cur.fixed_mask | bit,
+                cur.fixed_vals | bit // выставляем бит var в 1
+            });
         }
 
         return ok(std::move(tt));
 
-    } catch (const std::exception& e) {
-        return fail<TruthTable>(ErrorCode::InvalidArgument,
-            std::string("bdd_to_tt internal error: ") + e.what());
+    }
+    catch(const std::exception& e)
+    {
+        return fail<TruthTable>(
+            ErrorCode::InvalidArgument,
+            e.what());
     }
 }
 
-} // namespace bmm
+}
