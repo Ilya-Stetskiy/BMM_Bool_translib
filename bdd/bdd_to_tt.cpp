@@ -3,8 +3,14 @@
 #include <tracy/Tracy.hpp>
 #include <sylvan_obj.hpp>
 #include <vector>
+#include <algorithm>
 #include <cstdint>
 #include <stdexcept>
+
+#ifndef BMM_ASSERT
+#include <cassert>
+#define BMM_ASSERT(x) assert(x)
+#endif
 
 namespace bmm {
 
@@ -12,60 +18,67 @@ Result<TruthTable> bdd_to_tt(const Bdd& f) {
     ZoneScoped;
 
     try {
-        uint32_t n = f.n_vars();
-
+        const uint32_t n = f.n_vars();
         if (n > kMaxTruthTableVars) {
             return fail<TruthTable>(ErrorCode::TooManyVariables,
                 "bdd_to_tt: n > " + std::to_string(kMaxTruthTableVars));
         }
 
         sylvan::Bdd f_syl = f.raw();
-        TruthTable tt(n); // Инициализируется нулями по умолчанию
-
-        // Быстрый путь для констант
-        if (f_syl.isZero()) {
-            return ok(std::move(tt)); 
-        }
-        if (f_syl.isOne()) {
-            uint64_t rows = uint64_t{1} << n;
-            for (uint64_t i = 0; i < rows; ++i) {
-                kitty::set_bit(tt.raw(), i);
-            }
-            return ok(std::move(tt));
-        }
-
-        // Простая и надежная реализация: итеративный спуск по BDD для каждого минтерма.
-        // Для n <= 24 это занимает ~0.1-0.2 секунды.
-        // Эта структура идеально подходит для будущего параллелизма: 
-        // диапазон [0, 2^n) можно будет легко разбить на блоки.
-        uint64_t total_rows = uint64_t{1} << n;
+        TruthTable tt(n);
         
-        for (uint64_t minterm = 0; minterm < total_rows; ++minterm) {
-            sylvan::Bdd curr = f_syl;
-            
-            // Итеративный спуск по графу BDD
-            while (!curr.isTerminal()) {
-                uint32_t v = curr.TopVar();
-                // LSB_FIRST: проверяем v-й бит минтерма
-                if ((minterm >> v) & 1) {
-                    curr = curr.Then();
-                } else {
-                    curr = curr.Else();
-                }
+        if (f_syl.isZero()) return ok(std::move(tt));
+
+        // Прямой доступ к памяти kitty::dynamic_truth_table
+        uint64_t* data = tt.raw()._bits.data();
+
+        // Фрейм хранит узел BDD, битовую маску зафиксированных переменных
+        // и их конкретное значение для текущего пути.
+        struct Frame {
+            sylvan::Bdd node;
+            uint64_t mask;
+            uint64_t value;
+        };
+
+        std::vector<Frame> stack;
+        stack.reserve(64); 
+        stack.push_back(Frame{ f_syl, 0, 0 });
+
+        const uint64_t universe = (n >= 64) ? ~uint64_t{0} : ((uint64_t{1} << n) - 1);
+
+        while (!stack.empty()) {
+            Frame curr = std::move(stack.back());
+            stack.pop_back();
+
+            if (curr.node.isZero()) continue;
+
+            if (curr.node.isOne()) {
+                // Если мы дошли до One, все переменные, которые не попали в mask, 
+                // могут быть любыми (don't cares). Итерируемся по всем их комбинациям.
+                const uint64_t floating = (~curr.mask) & universe;
+                uint64_t sub = floating;
+                
+                do {
+                    uint64_t idx = curr.value | sub;
+                    data[idx >> 6] |= (uint64_t{1} << (idx & 63));
+                    sub = (sub - 1) & floating;
+                } while (sub != floating);
+                
+                continue;
             }
+
+            const uint32_t v = curr.node.TopVar();
+            BMM_ASSERT(v < n && "BDD variable index out of bounds");
             
-            // Если достигли терминала 1 (обертка sylvan::Bdd корректно 
-            // учитывает complement-бит в методах isOne() / isZero())
-            if (curr.isOne()) {
-                kitty::set_bit(tt.raw(), minterm);
-            }
+            // Ветвь Else (переменная v = 0)
+            stack.push_back(Frame{ curr.node.Else(), curr.mask | (uint64_t{1} << v), curr.value });
+            
+            // Ветвь Then (переменная v = 1)
+            stack.push_back(Frame{ curr.node.Then(), curr.mask | (uint64_t{1} << v), curr.value | (uint64_t{1} << v) });
         }
 
         return ok(std::move(tt));
 
-    } catch (const std::bad_alloc&) {
-        return fail<TruthTable>(ErrorCode::OutOfMemory,
-            "bdd_to_tt: исчерпана память при построении TT");
     } catch (const std::exception& e) {
         return fail<TruthTable>(ErrorCode::InvalidArgument,
             std::string("bdd_to_tt internal error: ") + e.what());
