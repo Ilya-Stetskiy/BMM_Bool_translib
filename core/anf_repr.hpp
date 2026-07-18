@@ -41,11 +41,9 @@
 #  if __has_include(<polybori.h>)
 #    define BMM_HAVE_BRIAL 1
 #    include <polybori.h>
-#    include <polybori/routines/pbori_routines_misc.h>
 using polybori::BoolePolynomial;
 using polybori::BoolePolyRing;
 using polybori::BooleMonomial;
-using polybori::substitute_variables;
 #  else
 #    define BMM_HAVE_BRIAL 0
 #  endif
@@ -68,21 +66,33 @@ public:
 
     uint32_t n_vars() const { return n_vars_; }
 
-    // Подстановка константы в каждую переменную через свободную функцию
-    // substitute_variables(ring, idx2poly, poly) (BoolePolynomial::set(idx,
-    // value) с двумя аргументами не существует в реальном API BRiAl), затем
-    // проверка hasConstantPart() на результате — после подстановки константы
-    // во все n переменных полином вырождается либо в 0, либо в константу "1".
+    // Прямой проход по термам полинома вместо substitute_variables(ring,
+    // idx2poly, poly_): предыдущая реализация на каждый вызов evaluate()
+    // клонировала и перестраивала весь ZDD полинома через
+    // substitute_variables — при переборе всех 2^n точек (to_tt(),
+    // verify::find_mismatch, verify::compute_chow_parameters и т.д. каждый
+    // прогоняют полный перебор) это O(2^n) полных ZDD-перестроений вместо
+    // O(2^n * |термов|) простых проверок. Терм (BooleMonomial) истинен на
+    // точке assignment ровно тогда, когда все его переменные равны 1 — тот
+    // же алгоритм, что и AnfFallback::evaluate ниже, только по
+    // BoolePolynomial/BooleMonomial итераторам BRiAl вместо std::set.
+    // Не пересобиралось этой сессией (BRiAl доступен только в контейнере
+    // сборки, недоступном с этого хоста) — перепроверить test_anf/test_aig
+    // перед мёржем.
     bool evaluate(const Assignment& assignment) const {
-        const auto& ring = poly_.ring();
-        std::vector<BoolePolynomial> idx2poly;
-        idx2poly.reserve(n_vars_);
-        for (uint32_t i = 0; i < n_vars_; ++i) {
-            const bool v = i < assignment.size() && assignment[i];
-            idx2poly.push_back(v ? ring.one() : ring.zero());
+        bool acc = false;
+        for (BoolePolynomial::const_iterator term = poly_.begin(); term != poly_.end(); ++term) {
+            bool value = true;
+            for (BooleMonomial::const_iterator var = term->begin(); var != term->end(); ++var) {
+                const uint32_t idx = *var;
+                if (!(idx < assignment.size() && assignment[idx])) {
+                    value = false;
+                    break;
+                }
+            }
+            acc ^= value;
         }
-        BoolePolynomial p = substitute_variables(ring, idx2poly, poly_);
-        return p.hasConstantPart();
+        return acc;
     }
 
     Result<TruthTable> to_tt() const {

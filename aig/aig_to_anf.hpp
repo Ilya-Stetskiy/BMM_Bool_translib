@@ -26,14 +26,22 @@ namespace bmm {
 //   промежуточных полиномов по узлам AIG обязательна для приемлемой
 //   производительности.
 //
-// Параллелизм: core/CONVENTIONS.md п.6, правило 2 — TBB, task_group на
-// обход узлов AIG + concurrent_hash_map для мемоизации node -> Anf.
+// Параллелизм: core/CONVENTIONS.md п.6, правило 2 формально требует TBB для
+// этой функции, но в реально используемой сборке (BMM_HAVE_BRIAL=1) это
+// требование НЕ применимо и сознательно не реализовано: BRiAl (CUDD-based
+// ZDD-менеджер) не потокобезопасен — подтверждено ThreadSanitizer, гонка в
+// CCuddCore::release() (см. aig/README.md §1.3, там же разбор, почему
+// бенчмарк "TBB scaling" в этой конфигурации измеряет шум, а не
+// параллелизм). task_group + concurrent_hash_map используются только в
+// fallback-ветке (AnfFallback, без BRiAl) — там нет разделяемого
+// потоконебезопасного менеджера, и параллелизм действительно есть.
 //
-// Обязательный бенчмарк (вторая итерация задания): TBB-функция, реализация
-// ДОЛЖНА пройти секцию "aig_to_anf_tbb_scaling" в test_aig.cpp (замер
-// 1-поточного vs полного tbb::global_control на n=8/12/kMaxReferenceAigVars,
-// см. benchmarks/tbb_scaling.hpp) — результат идёт в STATUS.md рядом со
-// статусом функции.
+// Обязательный бенчмарк (вторая итерация задания): секция
+// "aig_to_anf_tbb_scaling" в test_aig.cpp (замер 1-поточного vs полного
+// tbb::global_control на n=8/12/kMaxReferenceAigVars, см.
+// benchmarks/tbb_scaling.hpp) формально проходит (не требует минимального
+// speedup), но интерпретировать её число как "ускорение" для BRiAl-сборки
+// нельзя — см. aig/README.md §1.3.
 //
 // Тесты: test_aig.cpp, секции "aig_to_anf" (корректность) и
 // "aig_to_anf_tbb_scaling" (обязательный бенчмарк параллельности).
