@@ -17,6 +17,27 @@
 
 namespace bmm::benchmarks {
 
+// Общее между benchmarks/tbb_scaling.hpp и benchmarks/openmp_scaling.hpp —
+// раньше каждый из них независимо объявлял свои detail::median_of/
+// kMeasuredRuns, что было безобидно, пока ни один .cpp не подключал оба
+// сразу (test_thr.cpp — только OpenMP-версию, test_aig.cpp/test_anf.cpp —
+// только TBB-версию); как только anf/test_anf.cpp понадобилось замерить
+// tt_to_anf/anf_to_tt И под TBB (обязательный бенчмарк по CONVENTIONS.md
+// п.6), И под OpenMP (сам Мёбиус-трансформ распараллелен именно так — см.
+// tt_to_anf.hpp) — это стало ODR-конфликтом (redefinition) в одной единице
+// трансляции. Вынесено сюда, в общий для обоих header.
+namespace detail {
+inline double median_of(std::vector<double> v) {
+    std::sort(v.begin(), v.end());
+    return v[v.size() / 2];
+}
+}  // namespace detail
+
+// См. tbb_scaling.hpp/openmp_scaling.hpp за обоснованием величины (5, не 11
+// — часть штатного ctest, некоторые бенчмаркуемые функции уже стоят
+// секунды за вызов).
+inline constexpr int kMeasuredRuns = 5;
+
 // single_threaded_ms/parallel_ms — МЕДИАНА нескольких повторов (см.
 // measure_scaling/measure_scaling_omp в tbb_scaling.hpp/openmp_scaling.hpp),
 // не единичный замер. На суб-миллисекундных размерах (типичные тестовые

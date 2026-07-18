@@ -35,18 +35,12 @@
 
 namespace bmm::benchmarks {
 
-namespace detail {
-inline double median_of(std::vector<double> v) {
-    std::sort(v.begin(), v.end());
-    return v[v.size() / 2];
-}
-}  // namespace detail
-
-// ИСПРАВЛЕНО (см. benchmarks/tbb_scaling.hpp за тем же исправлением и полным
-// обоснованием — единичный замер на суб-миллисекундных функциях в основном
-// шум, не сигнал): 1 прогрев + медиана kMeasuredRuns независимых замеров на
-// каждую сторону вместо одного замера.
-inline constexpr int kMeasuredRuns = 5;
+// detail::median_of/kMeasuredRuns — общие с tbb_scaling.hpp, вынесены в
+// scaling.hpp (см. комментарий там). ИСПРАВЛЕНО (см. benchmarks/
+// tbb_scaling.hpp за тем же исправлением и полным обоснованием — единичный
+// замер на суб-миллисекундных функциях в основном шум, не сигнал): 1
+// прогрев + медиана kMeasuredRuns независимых замеров на каждую сторону
+// вместо одного замера.
 
 inline ScalingPoint measure_scaling_omp(const std::string& size_label,
                                          const std::function<void()>& work) {
