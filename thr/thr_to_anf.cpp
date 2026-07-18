@@ -41,7 +41,8 @@ Result<Anf> thr_to_anf(const Thr& thr) {
         int64_t theta = thr.theta();
 
         // 1. Построение таблицы истинности (OpenMP над плоским массивом, Правило №3)
-        #pragma omp parallel for
+        // Отсекаем накладные расходы OpenMP для массивов до n=16 (size <= 65536) включительно
+        #pragma omp parallel for if(size > 65536)
         for (uint64_t i = 0; i < size; ++i) {
             int64_t sum = 0;
             for (uint32_t b = 0; b < n; ++b) {
@@ -53,11 +54,17 @@ Result<Anf> thr_to_anf(const Thr& thr) {
         }
 
         // 2. Быстрое преобразование Мёбиуса in-place (OpenMP над плоским массивом)
-        for (uint32_t step = 1; step < size; step <<= 1) {
-            #pragma omp parallel for
-            for (uint64_t i = 0; i < size; i += (step << 1)) {
-                for (uint32_t j = 0; j < step; ++j) {
-                    tt[i + j + step] ^= tt[i + j];
+        // Инициализируем пул потоков один раз за пределами цикла по шагам
+        #pragma omp parallel if(size > 65536) 
+        {
+            for (uint32_t step = 1; step < size; step <<= 1) {
+                uint64_t step_x2 = step << 1;
+                
+                #pragma omp for collapse(2) schedule(static)
+                for (uint64_t i = 0; i < size; i += step_x2) {
+                    for (uint32_t j = 0; j < step; ++j) {
+                        tt[i + j + step] ^= tt[i + j];
+                    }
                 }
             }
         }
