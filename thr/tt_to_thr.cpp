@@ -6,40 +6,75 @@
 #include <vector>
 #include <memory>
 #include <new>
+#include <string>
 
 namespace bmm {
 
 Result<Thr> tt_to_thr(const TruthTable& tt) {
-    // Обязательный макрос для профилирования через Tracy (п.6)
+    // Обязательный макрос для профилирования через Tracy
     ZoneScoped;
 
-    // Глобальный перехват bad_alloc для защиты от OOM при огромном n (п.2а)
+    // Глобальный перехват bad_alloc для защиты от OOM
     try {
         const uint32_t n = tt.n_vars();
         
-        if (n >= 32) {
-            return fail<Thr>(ErrorCode::Unsupported, "Too many variables for threshold ILP formulation");
+        // Снижаем лимит: прямой ILP-подход нежизнеспособен выше n=16
+        if (n > 16) {
+            return fail<Thr>(ErrorCode::Unsupported, "n > 16 requires a heuristic or incremental ILP solver");
         }
 
         const uint64_t num_minterms = 1ULL << n;
-        
         std::vector<int8_t> is_on(num_minterms);
 
-        // Параллельный обход таблицы истинности через OpenMP (п.6)
+        // Отслеживание унитарности (Unateness)
+        std::vector<bool> acts_pos(n, false);
+        std::vector<bool> acts_neg(n, false);
+
+        // Параллельный обход таблицы истинности через OpenMP
         #pragma omp parallel
         {
             Assignment ass(n); 
+            std::vector<bool> local_pos(n, false);
+            std::vector<bool> local_neg(n, false);
 
             #pragma omp for schedule(static)
             for (uint64_t i = 0; i < num_minterms; ++i) {
                 for (uint32_t b = 0; b < n; ++b) {
-                    ass[b] = (i >> b) & 1; // BitOrder::LSB_FIRST (п.1)
+                    ass[b] = (i >> b) & 1; // BitOrder::LSB_FIRST
                 }
-                is_on[i] = tt.evaluate(ass) ? 1 : 0;
+                
+                bool val = tt.evaluate(ass);
+                is_on[i] = val ? 1 : 0;
+                
+                if (val) {
+                    for (uint32_t b = 0; b < n; ++b) {
+                        if (!ass[b]) local_pos[b] = true; 
+                    }
+                } else {
+                    for (uint32_t b = 0; b < n; ++b) {
+                        if (ass[b]) local_neg[b] = true;
+                    }
+                }
+            }
+
+            #pragma omp critical
+            {
+                for (uint32_t b = 0; b < n; ++b) {
+                    if (local_pos[b]) acts_pos[b] = true;
+                    if (local_neg[b]) acts_neg[b] = true;
+                }
             }
         }
 
-        // Построение ILP-модели через Google OR-Tools (п.5a)
+        // ПРЕДФИЛЬТР: Проверка на унитарность
+        // Если переменная действует и положительно, и отрицательно, это не пороговая функция.
+        for (uint32_t b = 0; b < n; ++b) {
+            if (acts_pos[b] && acts_neg[b]) {
+                return fail<Thr>(ErrorCode::Unsupported, "Failed unateness pre-filter: not a threshold function");
+            }
+        }
+
+        // Построение ILP-модели через Google OR-Tools
         std::unique_ptr<operations_research::MPSolver> solver(
             operations_research::MPSolver::CreateSolver("SCIP"));
         
