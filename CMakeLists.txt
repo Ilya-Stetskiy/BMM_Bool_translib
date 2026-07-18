@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.24)
-project(bmm-translib CXX)
+project(bmm-translib CXX CUDA) # Включена поддержка CUDA
+
+# Автоматически определяет архитектуру GPU на хосте (например, Ampere, Ada Lovelace и т.д.)
+if(NOT CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES native CACHE STRING "CUDA architectures")
+endif()
+
+# Находит заголовки и статические таргеты CUDA для обычных C++ файлов (.cpp)
+find_package(CUDAToolkit REQUIRED)
 
 # ---------------------------------------------------------------------------
 # Общие настройки
@@ -141,7 +149,7 @@ find_package(ortools CONFIG REQUIRED)
 find_package(OpenMP REQUIRED)
 
 # ---------------------------------------------------------------------------
-# Catch2 (тесты) — FetchContent, header-only порог входа минимален для
+# Catch2 (тесты) — FetchContent, header-only порог входа minimalен для
 # начинающих; см. обоснование выбора в README.md.
 # ---------------------------------------------------------------------------
 
@@ -237,7 +245,7 @@ bmm_add_format_library(bmm_aig
     aig/aig_to_thr.cpp
     aig/aig_to_tt.cpp
 )
-target_link_libraries(bmm_aig PRIVATE TBB::tbb ortools::ortools)  # aig_to_thr — LP/ILP (Muroga), см. aig_to_thr.hpp
+target_link_libraries(bmm_aig PRIVATE TBB::tbb ortools::ortools)
 
 bmm_add_format_library(bmm_bdd
     bdd/tt_to_bdd.cpp
@@ -245,14 +253,11 @@ bmm_add_format_library(bmm_bdd
     bdd/bdd_to_anf.cpp
     bdd/bdd_to_thr.cpp
     bdd/bdd_to_tt.cpp
+    bdd/bdd_to_tt_cuda.cpp 
+    gpu/gpu_serializer.cpp  
+    gpu/bdd_kernel.cu       
 )
-# bdd/* намеренно не линкует TBB/OpenMP — только Sylvan/Lace, см.
-# core/CONVENTIONS.md п.6. ortools::ortools — не нарушение этого правила:
-# OR-Tools не трогает BDD-узлы и не соревнуется с Lace за обход графа, это
-# отдельный самодостаточный ILP-солвер для bdd_to_thr (шаг 4 его пайплайна,
-# см. doc-комментарий в bdd_to_thr.hpp) — вызывается ПОСЛЕ того, как из BDD
-# уже извлечены prime implicants обычным Sylvan-обходом.
-target_link_libraries(bmm_bdd PRIVATE ortools::ortools)
+target_link_libraries(bmm_bdd PRIVATE ortools::ortools CUDA::cudart_static)
 
 bmm_add_format_library(bmm_anf
     anf/tt_to_anf.cpp
@@ -261,7 +266,7 @@ bmm_add_format_library(bmm_anf
     anf/anf_to_thr.cpp
     anf/anf_to_tt.cpp
 )
-target_link_libraries(bmm_anf PRIVATE TBB::tbb OpenMP::OpenMP_CXX ortools::ortools)  # anf_to_thr — LP/ILP; см. заметку-исключение tt_to_anf
+target_link_libraries(bmm_anf PRIVATE TBB::tbb OpenMP::OpenMP_CXX ortools::ortools)
 
 bmm_add_format_library(bmm_thr
     thr/tt_to_thr.cpp
@@ -270,7 +275,7 @@ bmm_add_format_library(bmm_thr
     thr/thr_to_anf.cpp
     thr/thr_to_tt.cpp
 )
-target_link_libraries(bmm_thr PRIVATE OpenMP::OpenMP_CXX TBB::tbb ortools::ortools)  # thr_to_aig/thr_to_anf строят граф -> TBB; tt_to_thr — LP/ILP
+target_link_libraries(bmm_thr PRIVATE OpenMP::OpenMP_CXX TBB::tbb ortools::ortools)
 
 # ---------------------------------------------------------------------------
 # test_aig / test_bdd / test_anf / test_thr
@@ -288,10 +293,7 @@ bmm_add_test_executable(test_anf bmm_anf anf/test_anf.cpp)
 bmm_add_test_executable(test_thr bmm_thr thr/test_thr.cpp)
 add_executable(test_core core/test_core.cpp verify/sat_encoding/test_sat_encoding.cpp)
 target_link_libraries(test_core PRIVATE bmm_core bmm_verify Catch2::Catch2)
-# test_aig/test_anf сами используют oneapi::tbb::global_control в секциях
-# "*_tbb_scaling" (см. benchmarks/tbb_scaling.hpp, добавлено во второй
-# итерации задания) — bmm_aig/bmm_anf линкуют TBB::tbb как PRIVATE, это не
-# распространяется транзитивно на test_aig/test_anf, поэтому линкуем явно.
+
 target_link_libraries(test_aig PRIVATE TBB::tbb)
 target_link_libraries(test_anf PRIVATE TBB::tbb)
 target_link_libraries(test_thr PRIVATE OpenMP::OpenMP_CXX)
@@ -306,8 +308,7 @@ catch_discover_tests(test_core)
 
 # ---------------------------------------------------------------------------
 # status — прогоняет все 4 тестовых бинаря + bmm_config_dump, генерирует
-# STATUS.md в корне репозитория. Не считается частью `ctest` (см.
-# .github/workflows/ci.yml — CI вызывает его отдельным шагом).
+# STATUS.md в корне репозитория.
 # ---------------------------------------------------------------------------
 
 add_custom_target(status
