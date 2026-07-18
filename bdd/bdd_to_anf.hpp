@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/common.hpp"
+#include "core/anf_repr.hpp"
 
 namespace bmm {
 
@@ -61,6 +61,13 @@ namespace bmm {
 // (std::set<Monomial>), учитывайте, что XOR двух больших множеств мономов
 // — операция, которую стоит делать последовательно после того, как обход
 // BDD завершён, а не параллельно с ним.
+//
+// Внимание при обходе BDD: физический уровень Sylvan узла (bdd.raw().TopVar())
+// не обязан совпадать с индексом переменной — см. Bdd::var_at_level() в
+// core/common.hpp и обоснование в anf/anf_to_bdd.cpp ("Часть 2"). Единственный
+// сейчас производитель Bdd с нестандартным порядком уровней — anf_to_bdd;
+// переменная монома, добавляемого в ANF на данном узле, — это
+// bdd.var_at_level(node.TopVar()), не сам TopVar() напрямую.
 //
 // Тесты: test_bdd.cpp, секция "bdd_to_anf".
 Result<Anf> bdd_to_anf(const Bdd& bdd);

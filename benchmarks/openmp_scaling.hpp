@@ -23,15 +23,30 @@
 
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <functional>
 #include <string>
+#include <vector>
 
 #include <omp.h>
 
 #include "benchmarks/scaling.hpp"
 
 namespace bmm::benchmarks {
+
+namespace detail {
+inline double median_of(std::vector<double> v) {
+    std::sort(v.begin(), v.end());
+    return v[v.size() / 2];
+}
+}  // namespace detail
+
+// ИСПРАВЛЕНО (см. benchmarks/tbb_scaling.hpp за тем же исправлением и полным
+// обоснованием — единичный замер на суб-миллисекундных функциях в основном
+// шум, не сигнал): 1 прогрев + медиана kMeasuredRuns независимых замеров на
+// каждую сторону вместо одного замера.
+inline constexpr int kMeasuredRuns = 5;
 
 inline ScalingPoint measure_scaling_omp(const std::string& size_label,
                                          const std::function<void()>& work) {
@@ -44,10 +59,15 @@ inline ScalingPoint measure_scaling_omp(const std::string& size_label,
 
     omp_set_num_threads(1);
     {
-        const auto start = std::chrono::steady_clock::now();
-        work();
-        const auto end = std::chrono::steady_clock::now();
-        point.single_threaded_ms = std::chrono::duration<double, std::milli>(end - start).count();
+        std::vector<double> samples;
+        samples.reserve(kMeasuredRuns);
+        for (int i = 0; i < kMeasuredRuns; ++i) {
+            const auto start = std::chrono::steady_clock::now();
+            work();
+            const auto end = std::chrono::steady_clock::now();
+            samples.push_back(std::chrono::duration<double, std::milli>(end - start).count());
+        }
+        point.single_threaded_ms = detail::median_of(std::move(samples));
     }
 
     omp_set_num_threads(default_threads);
@@ -55,10 +75,15 @@ inline ScalingPoint measure_scaling_omp(const std::string& size_label,
         // Дефолтное число потоков — omp_get_max_threads() на старте процесса
         // (обычно = число логических ядер контейнера, если OMP_NUM_THREADS
         // не выставлен явно).
-        const auto start = std::chrono::steady_clock::now();
-        work();
-        const auto end = std::chrono::steady_clock::now();
-        point.parallel_ms = std::chrono::duration<double, std::milli>(end - start).count();
+        std::vector<double> samples;
+        samples.reserve(kMeasuredRuns);
+        for (int i = 0; i < kMeasuredRuns; ++i) {
+            const auto start = std::chrono::steady_clock::now();
+            work();
+            const auto end = std::chrono::steady_clock::now();
+            samples.push_back(std::chrono::duration<double, std::milli>(end - start).count());
+        }
+        point.parallel_ms = detail::median_of(std::move(samples));
     }
 
     point.speedup = point.parallel_ms > 0.0 ? point.single_threaded_ms / point.parallel_ms : 0.0;

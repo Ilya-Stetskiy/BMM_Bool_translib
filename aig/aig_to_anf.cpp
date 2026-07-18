@@ -155,10 +155,19 @@ Result<Anf> aig_to_anf(const Aig& aig) {
             return *(entry->val);
         }
 
-        std::lock_guard<std::mutex> lock(entry->mtx);
-        if (entry->ready) {
-            return *(entry->val);
-        }
+        // ИСПРАВЛЕНО (тот же баг и то же исправление, что в
+        // aig/tt_to_aig.cpp::build_aig_rec — см. подробный разбор там и в
+        // aig/README.md §1.1): раньше здесь стоял std::lock_guard<std::mutex>
+        // lock(entry->mtx), удерживаемый поперёк tg.run()/tg.wait() ниже
+        // (ветка AnfFallback) — поток, ждущий чужой entry->mtx, становится
+        // недоступен планировщику TBB как воркер; при коллизиях на один
+        // memo-ключ это гарантированно исчерпывает арену (подтверждено
+        // стек-трейсом реального зависания в tt_to_aig.cpp). Здесь баг не
+        // проявлялся эмпирически только потому, что в текущей сборке
+        // BMM_HAVE_BRIAL=1 и эта ветка (AnfFallback) не выполняется — но
+        // код опасен структурно точно так же, как был tt_to_aig.cpp до
+        // фикса. Не блокируем поток ожиданием чужой работы — конкурентные
+        // вызовы для одного узла считают его независимо и избыточно.
 
         // Compute it (it's a gate)
         std::array<mockturtle::aig_network::signal, 2> fanins{};
@@ -196,8 +205,19 @@ Result<Anf> aig_to_anf(const Aig& aig) {
         // Multiply
         PolType res = mul_poly(p0_val, p1);
 
-        entry->val = res;
-        entry->ready = true;
+        {
+            // Короткая критическая секция БЕЗ рекурсии внутри — только
+            // публикация уже готового res (см. комментарий выше и
+            // aig/tt_to_aig.cpp за полным обоснованием). Если нас
+            // опередили — оставляем чужое значение каноническим в entry,
+            // но возвращаем СЕБЕ наш собственный res (логически
+            // эквивалентен).
+            std::lock_guard<std::mutex> lock(entry->mtx);
+            if (!entry->ready) {
+                entry->val = res;
+                entry->ready = true;
+            }
+        }
         return res;
     };
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/common.hpp"
+#include "core/anf_repr.hpp"
 
 namespace bmm {
 
@@ -24,6 +24,27 @@ namespace bmm {
 // "содержит x_i"/"не содержит x_i" можно делать последовательно перед тем,
 // как вызывать Sylvan.
 //
+// Порядок переменных (сравнение эвристик — см. подробную историю находок в
+// anf_to_bdd.cpp): физический уровень Sylvan для узла фиксирован ИНДЕКСОМ
+// переменной, поэтому единственный способ получить действительно другой
+// порядок переменных в итоговом BDD, а не только другой порядок обхода
+// рекурсии — строить узлы с bddVar(order[var]) и вернуть Bdd с явным
+// var_to_level = order (см. Bdd(root, n_vars, var_to_level) в
+// core/common.hpp). anf_to_bdd(anf) использует эвристику, выбранную по
+// итогам боевого сравнения (см. комментарий у convert() в .cpp);
+// anf_to_bdd_with_heuristic() — та же функция с явным выбором эвристики,
+// для сравнительных бенчмарков (anf/bench_bdd_heuristics.cpp) и на будущее,
+// если понадобится сравнение вне бенчмарка. Внешний production-код должен
+// использовать anf_to_bdd(anf).
+enum class VariableOrderHeuristic {
+    MinIndex,       // возрастающий индекс переменной (без учёта структуры полинома)
+    LengthFreqRank,  // по (макс. длине монома переменной, затем частоте) — см. compute_rank_by_length_freq
+    Degree,          // по степени в графе взаимодействия переменных — см. compute_rank_by_degree
+    Force,           // алгоритм FORCE (Aloul et al.) — см. compute_rank_force
+};
+
+Result<Bdd> anf_to_bdd_with_heuristic(const Anf& anf, VariableOrderHeuristic heuristic);
+
 // Тесты: test_anf.cpp, секция "anf_to_bdd".
 Result<Bdd> anf_to_bdd(const Anf& anf);
 

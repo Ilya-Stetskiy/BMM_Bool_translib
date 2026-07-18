@@ -5,6 +5,7 @@
 #include <ortools/linear_solver/linear_solver.h>
 
 #include <cmath>
+#include <memory>
 #include <variant>
 #include <vector>
 
@@ -52,16 +53,27 @@ Result<Thr> anf_to_thr(const Anf& anf)
 
 
     // =====================================
-    // 2. Создание LP
+    // 2. Создание LP/ILP-солвера
     // =====================================
 
     using namespace operations_research;
 
-
-    MPSolver solver(
-    "anf_to_thr",
-    MPSolver::CBC_MIXED_INTEGER_PROGRAMMING);
-
+    // Фолбэк-цепочка солверов, как в aig/aig_to_thr.cpp: SCIP обычно
+    // быстрее и надёжнее CBC на такого рода MIP, SAT — резерв на случай,
+    // если SCIP не собран в образе. CBC — последний резерв (раньше был
+    // единственным вариантом вообще, без фолбэка).
+    std::unique_ptr<MPSolver> solver(MPSolver::CreateSolver("SCIP"));
+    if (!solver) {
+        solver.reset(MPSolver::CreateSolver("SAT"));
+    }
+    if (!solver) {
+        solver.reset(MPSolver::CreateSolver("CBC"));
+    }
+    if (!solver) {
+        return fail<Thr>(
+            ErrorCode::Unsupported,
+            "anf_to_thr: OR-Tools solver backend not available");
+    }
 
 
     std::vector<const MPVariable*> weights(n);
@@ -71,7 +83,7 @@ Result<Thr> anf_to_thr(const Anf& anf)
     for(uint32_t i = 0; i < n; i++)
     {
         weights[i] =
-            solver.MakeIntVar(
+            solver->MakeIntVar(
                 -100000,
                 100000,
                 "w_" + std::to_string(i));
@@ -79,7 +91,7 @@ Result<Thr> anf_to_thr(const Anf& anf)
 
 
     auto theta =
-        solver.MakeIntVar(
+        solver->MakeIntVar(
             -100000,
             100000,
             "theta");
@@ -126,17 +138,17 @@ Result<Thr> anf_to_thr(const Anf& anf)
             // sum(w*x)-theta >= 0
 
             c =
-                solver.MakeRowConstraint(
+                solver->MakeRowConstraint(
                     0,
-                    solver.infinity());
+                    solver->infinity());
         }
         else
         {
             // sum(w*x)-theta <= -1
 
             c =
-                solver.MakeRowConstraint(
-                    -solver.infinity(),
+                solver->MakeRowConstraint(
+                    -solver->infinity(),
                     -1);
         }
 
@@ -168,7 +180,7 @@ Result<Thr> anf_to_thr(const Anf& anf)
 
 
     auto status =
-        solver.Solve();
+        solver->Solve();
 
 
 

@@ -49,21 +49,13 @@
 // а не сырые BDD-хэндлы из sylvan.h — см. CONVENTIONS.md п.6 про Sylvan/Lace.
 #include <sylvan_obj.hpp>
 
-#if defined(__has_include)
-#  if __has_include(<polybori.h>)
-#    define BMM_HAVE_BRIAL 1
-#    include <polybori.h>
-#    include <polybori/routines/pbori_routines_misc.h>
-using polybori::BoolePolynomial;
-using polybori::BoolePolyRing;
-using polybori::BooleMonomial;
-using polybori::substitute_variables;
-#  else
-#    define BMM_HAVE_BRIAL 0
-#  endif
-#else
-#  define BMM_HAVE_BRIAL 0
-#endif
+// BRiAl/ANF-специфика (BMM_HAVE_BRIAL, BoolePolynomial, тип Anf) вынесена в
+// core/anf_repr.hpp — см. обоснование там. common.hpp сознательно НЕ тянет
+// <polybori.h>: раньше это заставляло вообще все файлы проекта зависеть от
+// того, нашёлся ли BRiAl, хотя реально ANF нужен маленькому подмножеству
+// функций трансляции (aig_to_anf, bdd_to_anf, thr_to_anf, весь anf/*,
+// verify/reference_builders, verify/config_dump). Подключайте
+// core/anf_repr.hpp явно в тех файлах, которым нужен тип Anf.
 
 namespace bmm {
 
@@ -238,7 +230,36 @@ class Bdd {
 public:
     Bdd(sylvan::Bdd root, uint32_t n_vars) : root_(std::move(root)), n_vars_(n_vars) {}
 
+    // Перегрузка с явной перестановкой уровней — см. anf/anf_to_bdd.cpp и
+    // обоснование в его комментариях ("Часть 2" истории находок): физический
+    // уровень Sylvan для BDD-узла фиксирован ИНДЕКСОМ переданной переменной
+    // (bddVar(idx) -> sylvan_ithvar(idx)), поэтому единственный способ
+    // получить действительно другой (не совпадающий с [0..n) по возрастанию)
+    // порядок переменных в итоговом BDD — строить узлы с bddVar(var_to_level[i])
+    // вместо bddVar(i). var_to_level должен быть перестановкой [0, n_vars) —
+    // var_to_level[i] это уровень Sylvan, на котором в root РЕАЛЬНО разложена
+    // переменная i. Пустой var_to_level (конструктор выше) — identity
+    // (уровень i == переменная i), это поведение всех производителей Bdd
+    // кроме anf_to_bdd (tt_to_bdd, aig_to_bdd, thr_to_bdd используют
+    // натуральный порядок и не должны знать об этом параметре).
+    Bdd(sylvan::Bdd root, uint32_t n_vars, std::vector<uint32_t> var_to_level)
+        : root_(std::move(root)), n_vars_(n_vars), var_to_level_(std::move(var_to_level)) {
+        level_to_var_.resize(var_to_level_.size());
+        for (uint32_t v = 0; v < var_to_level_.size(); ++v) {
+            level_to_var_[var_to_level_[v]] = v;
+        }
+    }
+
     uint32_t n_vars() const { return n_vars_; }
+
+    // Переменная, реально разложенная на данном физическом уровне Sylvan
+    // внутри root_ (identity, если var_to_level не задан). Нужен потребителям
+    // raw()/TopVar() вроде bdd_to_aig.cpp/bdd_to_tt.cpp, которым иначе
+    // пришлось бы молча предполагать level == var — см. Bdd(root, n_vars,
+    // var_to_level) выше.
+    uint32_t var_at_level(uint32_t level) const {
+        return var_to_level_.empty() ? level : level_to_var_[level];
+    }
 
     // Точечное вычисление через "кубик"-BDD (конъюнкция литералов, заданных
     // assignment) вместо предполагаемого Eval(...) с неизвестной точной
@@ -249,7 +270,8 @@ public:
         sylvan::Bdd cube = sylvan::Bdd::bddOne();
         for (uint32_t i = 0; i < n_vars_; ++i) {
             const bool v = i < assignment.size() && assignment[i];
-            sylvan::Bdd lit = sylvan::Bdd::bddVar(i);
+            const uint32_t level = var_to_level_.empty() ? i : var_to_level_[i];
+            sylvan::Bdd lit = sylvan::Bdd::bddVar(level);
             if (!v) lit = !lit;
             cube = cube & lit;
         }
@@ -276,126 +298,16 @@ public:
 private:
     sylvan::Bdd root_;
     uint32_t n_vars_;
+    std::vector<uint32_t> var_to_level_;  // пусто = identity
+    std::vector<uint32_t> level_to_var_;  // обратное отображение, тот же признак пустоты
 };
 
 // ---------------------------------------------------------------------------
-// 6. Anf (CONVENTIONS.md п.5: BRiAl, если заголовки найдены, иначе fallback)
+// 6. Anf — вынесен в core/anf_repr.hpp (см. CONVENTIONS.md п.5а).
+//    Подключайте core/anf_repr.hpp явно там, где реально нужен тип Anf —
+//    common.hpp сюда сознательно не включает <polybori.h>, чтобы
+//    доступность/отключение BRiAl не задевало функции, не работающие с ANF.
 // ---------------------------------------------------------------------------
-
-#if BMM_HAVE_BRIAL
-
-class Anf {
-public:
-    explicit Anf(BoolePolynomial poly, uint32_t n_vars)
-        : poly_(std::move(poly)), n_vars_(n_vars) {}
-
-    uint32_t n_vars() const { return n_vars_; }
-
-    // Подстановка константы в каждую переменную через BoolePolynomial::set(idx,
-    // value) (стандартный элиминационный примитив PolyBoRi/BRiAl), затем
-    // проверка hasConstantPart() на результате — после подстановки константы
-    // во все n переменных полином вырождается либо в 0, либо в константу "1".
-    bool evaluate(const Assignment& assignment) const {
-    const auto& ring = poly_.ring();
-    std::vector<BoolePolynomial> idx2poly;
-    idx2poly.reserve(n_vars_);
-    for (uint32_t i = 0; i < n_vars_; ++i) {
-        const bool v = i < assignment.size() && assignment[i];
-        idx2poly.push_back(v ? ring.one() : ring.zero());
-    }
-    BoolePolynomial p = substitute_variables(ring, idx2poly, poly_);
-    return p.hasConstantPart();
-}
-
-    Result<TruthTable> to_tt() const {
-        if (n_vars_ > kMaxTruthTableVars) {
-            return fail<TruthTable>(ErrorCode::TooManyVariables, "");
-        }
-        TruthTable tt(n_vars_);
-        Assignment assignment(n_vars_, false);
-        const uint64_t rows = uint64_t{1} << n_vars_;
-        for (uint64_t idx = 0; idx < rows; ++idx) {
-            for (uint32_t b = 0; b < n_vars_; ++b) assignment[b] = (idx >> b) & 1u;
-            if (evaluate(assignment)) kitty::set_bit(tt.raw(), idx);
-        }
-        return ok<TruthTable>(std::move(tt));
-    }
-
-    BoolePolynomial& raw() { return poly_; }
-    const BoolePolynomial& raw() const { return poly_; }
-
-private:
-    BoolePolynomial poly_;
-    uint32_t n_vars_;
-};
-
-#else  // !BMM_HAVE_BRIAL — резервное представление, см. CONVENTIONS.md п.5
-
-// Моном: отсортированный список индексов переменных, входящих в него
-// (x_i * x_j, i<j). Пустой список — константный моном "1".
-using Monomial = std::vector<uint32_t>;
-
-// Полином Жегалкина — это F2-векторное пространство над свободными
-// squarefree-мономами: сложение = XOR, т.е. монoм либо присутствует, либо
-// нет. std::set с лексикографическим сравнением даёт именно это множество
-// при условии, что вставка дубликата **удаляет** существующий элемент
-// (см. AnfFallback::add_monomial) — тождество x XOR x = 0.
-class AnfFallback {
-public:
-    void add_monomial(Monomial m) {
-        std::sort(m.begin(), m.end());
-        auto [it, inserted] = monomials_.insert(m);
-        if (!inserted) monomials_.erase(it);  // XOR-сокращение
-    }
-
-    bool evaluate(const Assignment& assignment) const {
-        bool acc = false;
-        for (const auto& mono : monomials_) {
-            bool term = true;
-            for (uint32_t v : mono) {
-                if (!(v < assignment.size() && assignment[v])) { term = false; break; }
-            }
-            acc ^= term;
-        }
-        return acc;
-    }
-
-    const std::set<Monomial>& monomials() const { return monomials_; }
-
-private:
-    std::set<Monomial> monomials_;
-};
-
-class Anf {
-public:
-    Anf(AnfFallback poly, uint32_t n_vars) : poly_(std::move(poly)), n_vars_(n_vars) {}
-
-    uint32_t n_vars() const { return n_vars_; }
-    bool evaluate(const Assignment& assignment) const { return poly_.evaluate(assignment); }
-
-    Result<TruthTable> to_tt() const {
-        if (n_vars_ > kMaxTruthTableVars) {
-            return fail<TruthTable>(ErrorCode::TooManyVariables, "");
-        }
-        TruthTable tt(n_vars_);
-        Assignment assignment(n_vars_, false);
-        const uint64_t rows = uint64_t{1} << n_vars_;
-        for (uint64_t idx = 0; idx < rows; ++idx) {
-            for (uint32_t b = 0; b < n_vars_; ++b) assignment[b] = (idx >> b) & 1u;
-            if (evaluate(assignment)) kitty::set_bit(tt.raw(), idx);
-        }
-        return ok<TruthTable>(std::move(tt));
-    }
-
-    AnfFallback& raw() { return poly_; }
-    const AnfFallback& raw() const { return poly_; }
-
-private:
-    AnfFallback poly_;
-    uint32_t n_vars_;
-};
-
-#endif  // BMM_HAVE_BRIAL
 
 // ---------------------------------------------------------------------------
 // 7. Thr — пороговая функция f(x) = [sum(w_i * x_i) >= theta]
@@ -441,7 +353,8 @@ private:
 
 // ---------------------------------------------------------------------------
 // 8. Концепт "представление" — компилятор проверяет, что все пять типов
-//    реализуют один и тот же контракт (CONVENTIONS.md п.3).
+//    реализуют один и тот же контракт (CONVENTIONS.md п.3). Проверка для
+//    Anf — в core/anf_repr.hpp (тип там и определён), не здесь.
 // ---------------------------------------------------------------------------
 
 template <class T>
@@ -454,7 +367,6 @@ concept Representation = requires(const T& t, const Assignment& a) {
 static_assert(Representation<TruthTable>);
 static_assert(Representation<Aig>);
 static_assert(Representation<Bdd>);
-static_assert(Representation<Anf>);
 static_assert(Representation<Thr>);
 
 }  // namespace bmm

@@ -103,8 +103,10 @@ Result<TruthTable> anf_to_tt(const Anf& anf)
     std::vector<uint8_t> values(rows, 0);
 
     // =============================
-    // Обход полинома BRiAl
+    // Обход полинома (BRiAl BoolePolynomial либо fallback AnfFallback —
+    // см. core/anf_repr.hpp)
     // =============================
+#if BMM_HAVE_BRIAL
     for (auto it = anf.raw().begin(); it != anf.raw().end(); ++it)
     {
         uint64_t mask = 0;
@@ -114,6 +116,17 @@ Result<TruthTable> anf_to_tt(const Anf& anf)
         }
         values[mask] ^= 1;
     }
+#else
+    for (const auto& mono : anf.raw().monomials())
+    {
+        uint64_t mask = 0;
+        for (auto var : mono)
+        {
+            mask |= (1ULL << var);
+        }
+        values[mask] ^= 1;
+    }
+#endif
 
     // =============================
     // Преобразование Мёбиуса

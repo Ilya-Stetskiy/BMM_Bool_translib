@@ -45,7 +45,10 @@ Result<TruthTable> bdd_to_tt(const Bdd& f) {
             
             // Итеративный спуск по графу BDD
             while (!curr.isTerminal()) {
-                uint32_t v = curr.TopVar();
+                // level != переменная, если f построен с нестандартным
+                // порядком уровней (см. Bdd::var_at_level в core/common.hpp —
+                // сейчас единственный такой производитель Bdd — anf_to_bdd).
+                uint32_t v = f.var_at_level(curr.TopVar());
                 // LSB_FIRST: проверяем v-й бит минтерма
                 if ((minterm >> v) & 1) {
                     curr = curr.Then();

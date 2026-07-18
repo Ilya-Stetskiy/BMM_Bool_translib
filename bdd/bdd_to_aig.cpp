@@ -84,10 +84,14 @@ Result<Aig> bdd_to_aig(const Bdd& f) {
                     continue;
                 }
 
-                const uint32_t var_idx = frame.node.TopVar();
-                if (var_idx >= num_vars) {
+                const uint32_t level = frame.node.TopVar();
+                if (level >= num_vars) {
                     return fail<Aig>(ErrorCode::InvalidArgument, "bdd_to_aig: индекс BDD превышает n_vars()");
                 }
+                // level != var_idx, если f построен с нестандартным порядком
+                // уровней (см. Bdd::var_at_level в core/common.hpp — сейчас
+                // единственный такой производитель Bdd — anf_to_bdd).
+                const uint32_t var_idx = f.var_at_level(level);
 
                 const auto x_sig = pis[var_idx];
 
