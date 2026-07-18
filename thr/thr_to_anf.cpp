@@ -32,8 +32,8 @@ Result<Anf> thr_to_anf(const Thr& thr) {
         }
 
         uint64_t size = 1ull << n;
-        
-        // Используем int8_t вместо std::vector<bool> для безопасного конкурентного 
+
+        // Используем int8_t вместо std::vector<bool> для безопасного конкурентного
         // доступа в OpenMP (std::vector<bool> упаковывает биты и ломает потокобезопасность!)
         std::vector<int8_t> tt(size, 0);
 
@@ -41,7 +41,11 @@ Result<Anf> thr_to_anf(const Thr& thr) {
         int64_t theta = thr.theta();
 
         // 1. Построение таблицы истинности (OpenMP над плоским массивом, Правило №3)
-        #pragma omp parallel for
+        // ИСПРАВЛЕНО (см. thr/README.md §6.1/§6.2): раньше OpenMP включался
+        // безусловно, даже для n=8 (256 точек) — накладные расходы fork/join
+        // давали speedup=0.058 (в 17 раз медленнее последовательной версии).
+        // Отсекаем накладные расходы OpenMP для массивов до n=16 (size <= 65536) включительно.
+        #pragma omp parallel for if(size > 65536)
         for (uint64_t i = 0; i < size; ++i) {
             int64_t sum = 0;
             for (uint32_t b = 0; b < n; ++b) {
@@ -53,52 +57,86 @@ Result<Anf> thr_to_anf(const Thr& thr) {
         }
 
         // 2. Быстрое преобразование Мёбиуса in-place (OpenMP над плоским массивом)
-        for (uint32_t step = 1; step < size; step <<= 1) {
-            #pragma omp parallel for
-            for (uint64_t i = 0; i < size; i += (step << 1)) {
-                for (uint32_t j = 0; j < step; ++j) {
-                    tt[i + j + step] ^= tt[i + j];
+        // ИСПРАВЛЕНО (см. thr/README.md §6.1/§6.2): раньше #pragma omp parallel for
+        // стоял на ВНЕШНЕМ цикле по блокам — на последнем уровне трансформа
+        // (step=size/2) внешний цикл имел РОВНО одну итерацию, и весь этот
+        // уровень (полноценная 1/log2(size) доля общей работы) выполнялся на
+        // одном потоке, пока остальные простаивали; плюс log2(size) отдельных
+        // omp-регионов на вызов вместо одного. Теперь — один parallel-регион на
+        // весь трансформ (роспуск/создание thread team не на каждый уровень) +
+        // collapse(2), сливающий блочный и внутриблочный циклы в одно
+        // итерационное пространство — устраняет и накладные расходы, и
+        // дисбаланс последнего уровня.
+        #pragma omp parallel if(size > 65536)
+        {
+            for (uint32_t step = 1; step < size; step <<= 1) {
+                uint64_t step_x2 = step << 1;
+
+                #pragma omp for collapse(2) schedule(static)
+                for (uint64_t i = 0; i < size; i += step_x2) {
+                    for (uint32_t j = 0; j < step; ++j) {
+                        tt[i + j + step] ^= tt[i + j];
+                    }
                 }
             }
         }
 
         // 3. Сборка ANF из полученных коэффициентов Жегалкина
         // (Выполняется строго последовательно, что гарантирует безопасность CUDD/PolyBoRi)
+        //
+        // ИСПРАВЛЕНО (см. thr/README.md §6.1/§6.2, тот же паттерн, что и
+        // anf/README.md §5.3/§9.5 для tt_to_anf): раньше каждый моном строился
+        // через n последовательных умножений (m = m * ring.variable(b)) — O(n)
+        // операций BoolePolynomial::operator* на каждый из до 4.4М мономов при
+        // n=24. Теперь — polybori::BooleExponent (вектор индексов переменных) +
+        // BooleMonomial(vars, ring) за один вызов вместо n умножений. Число
+        // мономов на выходе не меняется (проверено на реальном корпусе,
+        // thr/README.md §6.2) — меняется только скорость построения.
 #if BMM_HAVE_BRIAL
         polybori::BoolePolyRing ring(n);
         polybori::BoolePolynomial poly(ring.zero());
-        
+
         for (uint64_t i = 0; i < size; ++i) {
             if (tt[i]) {
-                polybori::BoolePolynomial m(ring.one());
+                // Создаем BooleExponent заново на каждой итерации.
+                // У него есть reserve() и push_back(), но нет clear(),
+                // поэтому локальное создание — самый чистый обход API PolyBoRi.
+                polybori::BooleExponent vars;
+                vars.reserve(n);
+
+                // Заполняем индексы в порядке возрастания
                 for (uint32_t b = 0; b < n; ++b) {
                     if ((i >> b) & 1) {
-                        m = m * ring.variable(b);
+                        vars.push_back(b);
                     }
                 }
-                poly = poly + m;
+
+                // Создаем моном за один вызов, обходя C++ operator*
+                poly = poly + polybori::BooleMonomial(vars, ring);
             }
         }
         return ok(Anf(std::move(poly), n));
 #else
-        AnfFallback poly;
+        // Fallback-реализация для систем без BRIAL/PolyBoRi
+        AnfFallback p;
         for (uint64_t i = 0; i < size; ++i) {
             if (tt[i]) {
-                Monomial m;
+                std::vector<uint32_t> vars;
+                vars.reserve(n);
                 for (uint32_t b = 0; b < n; ++b) {
-                    if ((i >> b) & 1) m.push_back(b);
+                    if ((i >> b) & 1) {
+                        vars.push_back(b);
+                    }
                 }
-                poly.add_monomial(m); // add_monomial делает std::sort, вектор уже отсортирован
+                p.add_monomial(vars);
             }
         }
-        return ok(Anf(std::move(poly), n));
+        return ok(Anf(std::move(p), n));
 #endif
-
     } catch (const std::bad_alloc&) {
-        // Правило 2а: Graceful degradation при нехватке памяти 
-        return fail<Anf>(ErrorCode::OutOfMemory, "OutOfMemory: исчерпана память при построении ANF");
-    } catch (...) {
-        return fail<Anf>(ErrorCode::OutOfMemory, "OutOfMemory/Exception: неизвестная ошибка аллокации");
+        return fail<Anf>(ErrorCode::OutOfMemory, "thr_to_anf: исчерпана память");
+    } catch (const std::exception& e) {
+        return fail<Anf>(ErrorCode::InvalidArgument, e.what());
     }
 }
 

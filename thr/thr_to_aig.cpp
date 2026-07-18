@@ -110,11 +110,28 @@ Result<Aig> thr_to_aig(const Thr& thr) {
         using FAMemoMap = tbb::concurrent_hash_map<FA_Input, std::pair<Signal, Signal>, FA_Hash>;
         FAMemoMap fa_memo;
 
-        // Полный сумматор с мемоизацией
+        // Полный сумматор с мемоизацией.
+        //
+        // ИСПРАВЛЕНО: ключ раньше строился из ntk.node_to_index(ntk.get_node(s))
+        // — это отбрасывает complement-бит сигнала, т.к. get_node() возвращает
+        // один и тот же узел и для s, и для !s. full_adder(a,b,cin) и
+        // full_adder(!a,b,cin) в общем случае дают РАЗНЫЙ результат (sum
+        // инвертируется, но cout = maj(a,b,c) не связан с maj(!a,b,c) простой
+        // инверсией — см. thr/README.md, находка про потерю полярности) — при
+        // совпадении отсортированных индексов узлов, но разной полярности
+        // хотя бы одного входа, старый ключ мог тихо вернуть результат для
+        // ЧУЖОЙ комбинации полярностей. Кодируем индекс и полярность вместе
+        // (idx<<1 | complement) ДО сортировки — sum/cout симметричны при
+        // перестановке любой пары входов (a,b,cin), поэтому сортировка по
+        // такому расширенному ключу остаётся корректной канонизацией, просто
+        // больше не теряет полярность.
+        auto encode_signal = [&](Signal s) -> uint32_t {
+            uint32_t idx = ntk.node_to_index(ntk.get_node(s));
+            return (idx << 1) | (ntk.is_complemented(s) ? 1u : 0u);
+        };
+
         auto full_adder = [&](Signal a, Signal b, Signal cin) -> std::pair<Signal, Signal> {
-            std::array<uint32_t, 3> idxs = {ntk.node_to_index(ntk.get_node(a)), 
-                                            ntk.node_to_index(ntk.get_node(b)), 
-                                            ntk.node_to_index(ntk.get_node(cin))};
+            std::array<uint32_t, 3> idxs = {encode_signal(a), encode_signal(b), encode_signal(cin)};
             std::sort(idxs.begin(), idxs.end());
             FA_Input key{idxs[0], idxs[1], idxs[2]};
 

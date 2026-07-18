@@ -49,6 +49,7 @@ Result<Aig> tt_to_aig(const TruthTable& tt) {
         return fail<Aig>(ErrorCode::TooManyVariables, "tt_to_aig: слишком много переменных");
     }
 
+  try {
     mockturtle::aig_network net;
 
     // Create PI signals
@@ -183,6 +184,14 @@ Result<Aig> tt_to_aig(const TruthTable& tt) {
     net.create_po(final_signal);
 
     return ok<Aig>(Aig(std::move(net)));
+
+  } catch (const std::bad_alloc&) {
+      // ДОБАВЛЕНО: раньше не было ни одного catch — bad_alloc из
+      // build_aig_rec/mockturtle::aig_network распространялся бы как
+      // необработанное исключение через границу Result<T>, в нарушение
+      // CONVENTIONS.md п.2/2а.
+      return fail<Aig>(ErrorCode::OutOfMemory, "tt_to_aig: исчерпана память");
+  }
 }
 
 } // namespace bmm

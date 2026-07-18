@@ -3,6 +3,7 @@
 #include <tracy/Tracy.hpp>
 #include <ortools/linear_solver/linear_solver.h>
 #include <omp.h>
+#include <cmath>
 #include <vector>
 #include <memory>
 #include <new>
@@ -40,11 +41,22 @@ Result<Thr> tt_to_thr(const TruthTable& tt) {
         }
 
         // Построение ILP-модели через Google OR-Tools (п.5a)
+        //
+        // ИСПРАВЛЕНО: раньше пробовался только "SCIP", без фолбэка — если
+        // конкретная сборка OR-Tools не включает SCIP, функция отказывала
+        // безусловно, хотя aig/aig_to_thr.cpp и anf/anf_to_thr.cpp в этом же
+        // проекте уже используют цепочку SCIP -> SAT -> CBC. Перенесено сюда
+        // для единообразия.
         std::unique_ptr<operations_research::MPSolver> solver(
             operations_research::MPSolver::CreateSolver("SCIP"));
-        
         if (!solver) {
-            return fail<Thr>(ErrorCode::Unsupported, "OR-Tools SCIP solver is not available");
+            solver.reset(operations_research::MPSolver::CreateSolver("SAT"));
+        }
+        if (!solver) {
+            solver.reset(operations_research::MPSolver::CreateSolver("CBC"));
+        }
+        if (!solver) {
+            return fail<Thr>(ErrorCode::Unsupported, "OR-Tools solver backend not available (tried SCIP/SAT/CBC)");
         }
 
         std::vector<operations_research::MPVariable*> w(n);
@@ -77,11 +89,33 @@ Result<Thr> tt_to_thr(const TruthTable& tt) {
         if (status == operations_research::MPSolver::OPTIMAL || 
             status == operations_research::MPSolver::FEASIBLE) {
             
+            // ИСПРАВЛЕНО: static_cast<int64_t> от double усекает к нулю, а не
+            // округляет (2.9999999 -> 2 вместо 3 из-за погрешности решателя);
+            // aig_to_thr.cpp/anf_to_thr.cpp в этом же проекте уже используют
+            // std::round/std::llround для этого перевода — приведено к
+            // единообразию.
             std::vector<int64_t> weights(n);
             for (uint32_t b = 0; b < n; ++b) {
-                weights[b] = static_cast<int64_t>(w[b]->solution_value());
+                weights[b] = static_cast<int64_t>(std::llround(w[b]->solution_value()));
             }
-            int64_t threshold = static_cast<int64_t>(T_var->solution_value());
+            int64_t threshold = static_cast<int64_t>(std::llround(T_var->solution_value()));
+
+            // ДОБАВЛЕНО: верификация решения солвера перед выдачей — тот же
+            // паттерн, что bdd/bdd_to_thr.cpp::verify_threshold_from_tt.
+            // static_cast<int64_t> от double-solution_value() без округления
+            // (в отличие от std::llround в aig_to_thr/anf_to_thr) — лишний
+            // повод перепроверить результат, а не доверять ему вслепую.
+            for (uint64_t i = 0; i < num_minterms; ++i) {
+                int64_t sum = 0;
+                for (uint32_t b = 0; b < n; ++b) {
+                    if ((i >> b) & 1) sum += weights[b];
+                }
+                bool predicted = (sum >= threshold);
+                if (predicted != (is_on[i] == 1)) {
+                    return fail<Thr>(ErrorCode::Unsupported,
+                        "tt_to_thr: решение солвера не проходит верификацию по исходной таблице истинности");
+                }
+            }
 
             return ok(Thr{weights, threshold});
         } else {

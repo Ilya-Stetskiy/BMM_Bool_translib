@@ -117,6 +117,7 @@ Result<Anf> aig_to_anf(const Aig& aig) {
 
     const uint32_t n = aig.n_vars();
 
+  try {
 #if BMM_HAVE_BRIAL
     // Топологический проход БЕЗ рекурсии и БЕЗ TBB. Это сознательный отказ
     // от параллелизма, а не недосмотр: BRiAl (CUDD-based ZDD-менеджер) не
@@ -262,6 +263,13 @@ Result<Anf> aig_to_anf(const Aig& aig) {
 
     return ok<Anf>(Anf(std::move(final_poly), n));
 #endif
+  } catch (const std::bad_alloc&) {
+      // ДОБАВЛЕНО: раньше не было ни одного catch в этой функции — рост
+      // BoolePolynomial/AnfFallback не ограничен заранее по построению
+      // (в отличие от TruthTable-выходов), bad_alloc распространялся бы как
+      // необработанное исключение через границу Result<T>.
+      return fail<Anf>(ErrorCode::OutOfMemory, "aig_to_anf: исчерпана память");
+  }
 }
 
 }  // namespace bmm

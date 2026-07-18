@@ -13,6 +13,7 @@ Result<Bdd> aig_to_bdd(const Aig& aig) {
         return fail<Bdd>(ErrorCode::Unsupported, "aig_to_bdd: ожидается ровно один PO");
     }
 
+  try {
     std::vector<sylvan::Bdd> node_bdds(net.size(), sylvan::Bdd::bddZero());
     
     // Constant false node
@@ -55,6 +56,17 @@ Result<Bdd> aig_to_bdd(const Aig& aig) {
     }
 
     return ok<Bdd>(Bdd(final_bdd, aig.n_vars()));
+
+  } catch (const std::bad_alloc&) {
+      // ДОБАВЛЕНО: тот же класс риска, что и у anf_to_bdd (aig/README.md,
+      // находка про взрыв BDD на "разнесённых" по индексу парах переменных —
+      // см. anf/README.md §5.2) — здесь это никогда целенаправленно не
+      // проверялось на bad_alloc в чистом виде (Sylvan/Lace обычно падает
+      // через abort(), не бросает исключение, но нет причины не поймать и
+      // bad_alloc там, где он всё же может прийти — например, из самого
+      // std::vector<sylvan::Bdd> node_bdds на очень большой сети).
+      return fail<Bdd>(ErrorCode::OutOfMemory, "aig_to_bdd: исчерпана память");
+  }
 }
 
 }  // namespace bmm

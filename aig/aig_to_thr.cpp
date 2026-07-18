@@ -22,8 +22,9 @@ Result<Thr> aig_to_thr(const Aig& aig) {
         return fail<Thr>(ErrorCode::TooManyVariables, "aig_to_thr: слишком много переменных");
     }
 
+  try {
     uint64_t num_states = uint64_t{1} << n;
-    
+
     // We use a flat vector of uint8_t for thread safety (no bit-packing data races)
     std::vector<uint8_t> tt(num_states, 0);
 
@@ -137,10 +138,35 @@ Result<Thr> aig_to_thr(const Aig& aig) {
             weights[i] = static_cast<int64_t>(std::round(w[i]->solution_value()));
         }
         int64_t theta_val = static_cast<int64_t>(std::round(theta->solution_value()));
+
+        // ДОБАВЛЕНО: верификация решения солвера перед выдачей — тот же
+        // паттерн, что bdd/bdd_to_thr.cpp::verify_threshold_from_tt (там —
+        // единственное место в проекте, где это уже было сделано). tt уже
+        // построена выше, повторный проход по num_states точкам — та же
+        // цена, что и построение ограничений, на порядок дешевле самого
+        // ILP-solve.
+        for (uint64_t idx = 0; idx < num_states; ++idx) {
+            int64_t sum = 0;
+            for (uint32_t i = 0; i < n; ++i) {
+                if ((idx >> i) & 1ULL) sum += weights[i];
+            }
+            bool predicted = (sum >= theta_val);
+            if (predicted != (tt[idx] != 0)) {
+                return fail<Thr>(ErrorCode::Unsupported,
+                    "aig_to_thr: решение солвера не проходит верификацию по исходной функции");
+            }
+        }
+
         return ok<Thr>(Thr(std::move(weights), theta_val));
     }
 
     return fail<Thr>(ErrorCode::Unsupported, "aig_to_thr: функция не является пороговой");
+
+  } catch (const std::bad_alloc&) {
+      return fail<Thr>(ErrorCode::OutOfMemory, "aig_to_thr: исчерпана память при построении ILP-модели");
+  } catch (const std::exception& e) {
+      return fail<Thr>(ErrorCode::InvalidArgument, std::string("aig_to_thr error: ") + e.what());
+  }
 }
 
 }  // namespace bmm

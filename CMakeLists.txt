@@ -315,6 +315,42 @@ catch_discover_tests(test_thr)
 catch_discover_tests(test_core)
 
 # ---------------------------------------------------------------------------
+# test_chains — round-trip/циклы/прямой-vs-обходной путь между всеми пятью
+# представлениями (см. verify/chain_tests.cpp). ПОСТОЯННЫЙ таргет (не
+# удаляется), в отличие от bench_*/diag_*: дополняет тесты отдельных функций
+# проверкой их КОМПОЗИЦИИ. Не через catch_discover_tests — свой формат вывода
+# (markdown-отчёт verify/CHAIN_TESTS_REPORT.md), не Catch2 TEST_CASE.
+# ---------------------------------------------------------------------------
+
+add_executable(test_chains verify/chain_tests.cpp)
+target_link_libraries(test_chains PRIVATE bmm_aig bmm_bdd bmm_anf bmm_thr bmm_verify bmm_core
+                                           TBB::tbb OpenMP::OpenMP_CXX ortools::ortools)
+add_test(NAME chain_tests COMMAND test_chains
+         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# ---------------------------------------------------------------------------
+# test_real_datasets — те же проверки (отдельные функции + round-trip), но
+# на РЕАЛЬНЫХ наборах данных (EPFL AIG-схемы, AES S-box/χ/бент-функция,
+# Коллегия выборщиков США), а не на синтетических growing_test_functions()
+# (см. verify/real_datasets_tests.cpp). Требует предварительно скачанного
+# benchmarks/data/epfl (benchmarks/scripts/download_epfl.sh) — если его нет,
+# соответствующие EPFL-случаи просто SKIP, не FAIL всего теста.
+# ---------------------------------------------------------------------------
+
+add_executable(test_real_datasets verify/real_datasets_tests.cpp)
+target_link_libraries(test_real_datasets PRIVATE bmm_aig bmm_bdd bmm_anf bmm_thr bmm_verify
+                                                  bmm_core TBB::tbb OpenMP::OpenMP_CXX ortools::ortools)
+# lorina (для чтения AIGER) тянет fmt v6, который в этом дереве mockturtle не
+# собран отдельной статической библиотекой (никакой другой таргет проекта не
+# вызывал lorina::read_aiger по-настоящему, поэтому проблема не всплывала
+# раньше) — FMT_HEADER_ONLY заставляет fmt быть полностью inline, без
+# недостающих внешних символов при линковке. Только для этого таргета —
+# не переиспользуется в одном бинарнике с другими TU, ODR-риска нет.
+target_compile_definitions(test_real_datasets PRIVATE FMT_HEADER_ONLY)
+add_test(NAME real_datasets_tests COMMAND test_real_datasets
+         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# ---------------------------------------------------------------------------
 # status — прогоняет все 4 тестовых бинаря + bmm_config_dump, генерирует
 # STATUS.md в корне репозитория. Не считается частью `ctest` (см.
 # .github/workflows/ci.yml — CI вызывает его отдельным шагом).

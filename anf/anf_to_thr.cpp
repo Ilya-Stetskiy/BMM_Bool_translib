@@ -6,7 +6,6 @@
 
 #include <cmath>
 #include <memory>
-#include <variant>
 #include <vector>
 
 
@@ -27,6 +26,7 @@ Result<Thr> anf_to_thr(const Anf& anf)
     }
 
 
+  try {
 
     // =====================================
     // 1. ANF -> Truth Table
@@ -34,11 +34,17 @@ Result<Thr> anf_to_thr(const Anf& anf)
 
     auto tt_result = anf_to_tt(anf);
 
-
-    if (std::holds_alternative<Error>(tt_result))
+    // ИСПРАВЛЕНО: раньше здесь были std::holds_alternative<Error>/std::get —
+    // это напрямую предполагает, что Result<T> реализован как std::variant, в
+    // обход is_ok/value/error из core/common.hpp, которые как раз и существуют,
+    // чтобы скрыть, каким бэкендом собран Result<T> (std::expected или
+    // variant-fallback, см. CONVENTIONS.md п.2). std::expected не имеет
+    // holds_alternative/get — при сборке с BMM_HAS_STD_EXPECTED=1 этот файл
+    // просто не скомпилировался бы. Единственное место в проекте, где эта
+    // абстракция была нарушена напрямую.
+    if (!is_ok(tt_result))
     {
-        const auto& err =
-            std::get<Error>(tt_result);
+        const auto& err = error(tt_result);
 
         return fail<Thr>(
             err.code,
@@ -46,9 +52,10 @@ Result<Thr> anf_to_thr(const Anf& anf)
     }
 
 
-    TruthTable tt =
-        std::move(
-            std::get<TruthTable>(tt_result));
+    // value() возвращает const T& независимо от бэкенда Result<T> (см.
+    // core/common.hpp) — копия, а не move, тот же паттерн, что уже
+    // используется в bdd/bdd_to_anf.cpp::FallbackEngine.
+    TruthTable tt = value(tt_result);
 
 
 
@@ -123,7 +130,7 @@ Result<Thr> anf_to_thr(const Anf& anf)
         mask++)
     {
 
-        bool value =
+        bool bit_value =
             kitty::get_bit(
                 tt.raw(),
                 mask);
@@ -133,7 +140,7 @@ Result<Thr> anf_to_thr(const Anf& anf)
         MPConstraint* c;
 
 
-        if(value)
+        if(bit_value)
         {
             // sum(w*x)-theta >= 0
 
@@ -220,11 +227,38 @@ Result<Thr> anf_to_thr(const Anf& anf)
                 theta->solution_value()));
 
 
+    // ДОБАВЛЕНО: верификация решения солвера перед выдачей — тот же паттерн,
+    // что bdd/bdd_to_thr.cpp::verify_threshold_from_tt (единственное место в
+    // проекте, где это уже было сделано). llround() при переводе LP-решения в
+    // целые веса и OPTIMAL-статус солвера сами по себе не гарантируют, что
+    // округлённые (weights, theta) реально воспроизводят исходную функцию
+    // (численные артефакты решателя, округление) — дешевле перепроверить по
+    // уже построенной tt (n тут <= 20, не дороже, чем уже пройденный цикл
+    // построения ограничений), чем молча вернуть Ok с неверными весами.
+    for (uint64_t mask = 0; mask < rows; ++mask) {
+        int64_t sum = 0;
+        for (uint32_t i = 0; i < n; ++i) {
+            if (mask & (1ULL << i)) sum += result_weights[i];
+        }
+        bool predicted = (sum >= result_theta);
+        bool actual = kitty::get_bit(tt.raw(), mask);
+        if (predicted != actual) {
+            return fail<Thr>(
+                ErrorCode::Unsupported,
+                "anf_to_thr: решение солвера не проходит верификацию по исходной функции");
+        }
+    }
 
     return ok<Thr>(
         Thr(
             std::move(result_weights),
             result_theta));
+
+  } catch (const std::bad_alloc&) {
+      return fail<Thr>(ErrorCode::OutOfMemory, "anf_to_thr: исчерпана память при построении ILP-модели");
+  } catch (const std::exception& e) {
+      return fail<Thr>(ErrorCode::InvalidArgument, std::string("anf_to_thr error: ") + e.what());
+  }
 }
 
 

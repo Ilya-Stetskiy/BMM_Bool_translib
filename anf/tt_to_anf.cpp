@@ -131,22 +131,32 @@ Result<Anf> tt_to_anf(const TruthTable& tt)
     BoolePolynomial::ring_type ring(n);
     BoolePolynomial poly(ring);
 
+    // ИСПРАВЛЕНО (см. anf/README.md §5.3/§9.5, thr/README.md §6.1/§6.2 —
+    // тот же антипаттерн уже был найден и исправлен в thr_to_anf.cpp):
+    // раньше каждый моном строился через n последовательных умножений
+    // (mono *= ring.variable(var)) — O(n) операций BoolePolynomial::operator*
+    // на КАЖДЫЙ из до 4.4М мономов при n=24; собственное измерение в
+    // anf/README.md §5.3 показывает, что именно эта сборка (не сам
+    // Мёбиус-трансформ выше) доминирует по времени на плотных функциях
+    // (10.56с из ~10.6с общих на n=22). BooleExponent (вектор индексов) +
+    // BooleMonomial(exp, ring) строит моном за один вызов вместо n умножений.
     for (uint64_t mask = 0; mask < rows; ++mask)
     {
         if (!coeff[mask])
             continue;
 
-        BooleMonomial mono(ring);
+        polybori::BooleExponent exp;
+        exp.reserve(n);
 
         for (uint32_t var = 0; var < n; ++var)
         {
             if (mask & (1ULL << var))
             {
-                mono *= ring.variable(var);
+                exp.push_back(var);
             }
         }
 
-        poly += mono;
+        poly += BooleMonomial(exp, ring);
     }
 
     return ok<Anf>(Anf(std::move(poly), n));

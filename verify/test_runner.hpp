@@ -76,6 +76,41 @@ inline Evaluator evaluator_from_gt(const GroundTruthFunction& gt) {
     return [&gt](const std::vector<bool>& a) { return gt.evaluate(assignment_to_index(a)); };
 }
 
+// Материализует r.to_tt() ОДИН раз и возвращает Evaluator с O(1)-подстановкой
+// по битовой маске вместо повторного r.evaluate() на каждой из 2^n_vars
+// точек. Ниже (run_translation_tests) evaluate() каждого представления и так
+// вызывается ровно 2^n_vars раз — ОДИН этими самым to_tt() (или напрямую, для
+// представлений, где to_tt() пока не реализован/недоступен) — а не до 4 раз
+// (find_mismatch + compute_chow_parameters + compare_anf_degree +
+// check_cofactor_commutativity), как было раньше. Особенно важно для Anf:
+// Anf::evaluate() стоит O(размера полинома) за вызов (в отличие от, например,
+// TruthTable::evaluate(), O(1)) — на плотных полиномах (OR/XOR-всех,
+// случайные функции) при n_vars>=11-12 четыре независимых прохода по 2^n
+// точкам каждый уже давали десятки секунд НА ОДНУ тестовую функцию, суммарно
+// вплоть до зависания целой секции ctest. to_tt() сам эту же работу делает
+// один раз; для Anf он же (core/anf_repr.hpp) использует настоящее
+// преобразование Мёбиуса, O(n*2^n), а не наивный цикл по evaluate().
+// Не нарушает независимость верификации (CONVENTIONS.md п.7): to_tt()/
+// evaluate() — примитивы САМОГО типа представления (core/, не один из 20
+// студенческих переводов), ровно то же доверие, что уже оказано
+// TruthTable::evaluate()/Bdd::evaluate() и т.п. Evaluate() каждой точки
+// по-прежнему реально вызывается (внутри to_tt()), просто один раз, а не
+// четыре.
+template <Representation R>
+Evaluator make_fast_evaluator(const R& r) {
+    auto tt_result = r.to_tt();
+    if (is_ok(tt_result)) {
+        TruthTable tt = value(tt_result);
+        return [tt](const std::vector<bool>& a) {
+            return kitty::get_bit(tt.raw(), assignment_to_index(a)) != 0;
+        };
+    }
+    // to_tt() недоступен для этого n_vars (TooManyVariables) — сюда test_runner.hpp
+    // не должен доходить при growing_test_functions()-размерах (<= kMaxTruthTableVars),
+    // но на случай будущего расширения диапазона — честный fallback на прямой evaluate().
+    return [&r](const std::vector<bool>& a) { return r.evaluate(a); };
+}
+
 }  // namespace detail
 
 // From/To — любые два типа, удовлетворяющих Representation (core/common.hpp).
@@ -139,9 +174,14 @@ TestOutcome run_translation_tests(
         }
         const To& dst = value(dst_result);
 
+        // eval_src/eval_dst материализуют to_tt() ОДИН раз каждый и переиспользуются
+        // во всех шагах ниже (ground_truth + все metamorphic-проверки) вместо
+        // повторного evaluate() на каждый шаг — см. detail::make_fast_evaluator.
+        const Evaluator eval_src = detail::make_fast_evaluator(src);
+        const Evaluator eval_dst = detail::make_fast_evaluator(dst);
+
         // --- шаг 1: ground_truth -------------------------------------------------
-        auto mismatch =
-            find_mismatch(gt, [&](const std::vector<bool>& a) { return dst.evaluate(a); });
+        auto mismatch = find_mismatch(gt, eval_dst);
         if (mismatch) {
             const auto assignment = decode_assignment(*mismatch, gt.n_vars);
             std::string bits;
@@ -152,8 +192,6 @@ TestOutcome run_translation_tests(
         }
 
         // --- шаг 2: metamorphic ---------------------------------------------------
-        const Evaluator eval_src = [&](const std::vector<bool>& a) { return src.evaluate(a); };
-        const Evaluator eval_dst = [&](const std::vector<bool>& a) { return dst.evaluate(a); };
 
         const auto chow_src = compute_chow_parameters(gt.n_vars, eval_src);
         const auto chow_dst = compute_chow_parameters(gt.n_vars, eval_dst);

@@ -53,6 +53,46 @@ using polybori::BooleMonomial;
 
 namespace bmm {
 
+namespace detail {
+
+// Быстрое преобразование Мёбиуса/Жегалкина (коэффициенты ANF -> таблица
+// истинности), O(n * 2^n) вместо наивных 2^n вызовов Anf::evaluate() (каждый
+// из которых сам по себе O(размера полинома) — итого O(2^n * размер), что на
+// плотных полиномах (OR/XOR-всех, случайные функции) при n>=11-12 уже растёт
+// до десятков секунд НА ОДИН вызов to_tt(), а verify/test_runner.hpp вызывает
+// его эквивалент (через evaluate() в цикле) до 4 раз на каждую тестовую
+// функцию — см. обсуждение производительности test-инфраструктуры. Это код
+// core/ (инфраструктура, не один из 20 переводов, которые пишут студенты —
+// сравните с тем, что TruthTable::evaluate()/Bdd::evaluate() тоже не наивны),
+// поэтому ускорение здесь не создаёт риска "тестировать код сам на себе" в
+// смысле CONVENTIONS.md п.7: verify/ по-прежнему не полагается ни на один из
+// aig_to_anf.cpp/anf_to_tt.cpp/tt_to_anf.cpp/etc., только на этот примитив
+// самого типа Anf, ровно как для остальных 4 представлений.
+//
+// values[mask] = 1, если моном prod_{i: mask бит i=1} x_i присутствует в
+// полиноме (коэффициент 1 в базисе Жегалкина). Инволюция XOR-transform
+// (тот же алгоритм, что anf/anf_to_tt.cpp::mobius_transform_sequential)
+// переводит эти коэффициенты в значения функции на всех точках.
+inline TruthTable mobius_coefficients_to_tt(std::vector<uint8_t>& values, uint32_t n_vars) {
+    const uint64_t size = uint64_t{1} << n_vars;
+    for (uint32_t i = 0; i < n_vars; ++i) {
+        const uint64_t bit = uint64_t{1} << i;
+        const uint64_t step = bit << 1;
+        for (uint64_t j = 0; j < size; j += step) {
+            for (uint64_t k = 0; k < bit; ++k) {
+                values[j + k + bit] ^= values[j + k];
+            }
+        }
+    }
+    TruthTable tt(n_vars);
+    for (uint64_t idx = 0; idx < size; ++idx) {
+        if (values[idx]) kitty::set_bit(tt.raw(), idx);
+    }
+    return tt;
+}
+
+}  // namespace detail
+
 // ---------------------------------------------------------------------------
 // Anf (CONVENTIONS.md п.5: BRiAl, если заголовки найдены, иначе fallback)
 // ---------------------------------------------------------------------------
@@ -95,18 +135,23 @@ public:
         return acc;
     }
 
+    // Через быстрое преобразование Мёбиуса (core/anf_repr.hpp::detail::
+    // mobius_coefficients_to_tt) вместо 2^n_vars_ вызовов evaluate() — см.
+    // обоснование там же. Извлечение коэффициентов — один проход по термам
+    // полинома (O(размер полинома)), не по всем 2^n точкам.
     Result<TruthTable> to_tt() const {
         if (n_vars_ > kMaxTruthTableVars) {
             return fail<TruthTable>(ErrorCode::TooManyVariables, "");
         }
-        TruthTable tt(n_vars_);
-        Assignment assignment(n_vars_, false);
-        const uint64_t rows = uint64_t{1} << n_vars_;
-        for (uint64_t idx = 0; idx < rows; ++idx) {
-            for (uint32_t b = 0; b < n_vars_; ++b) assignment[b] = (idx >> b) & 1u;
-            if (evaluate(assignment)) kitty::set_bit(tt.raw(), idx);
+        std::vector<uint8_t> values(uint64_t{1} << n_vars_, 0);
+        for (BoolePolynomial::const_iterator term = poly_.begin(); term != poly_.end(); ++term) {
+            uint64_t mask = 0;
+            for (BooleMonomial::const_iterator var = term->begin(); var != term->end(); ++var) {
+                mask |= (uint64_t{1} << static_cast<uint32_t>(*var));
+            }
+            values[mask] ^= 1;
         }
-        return ok<TruthTable>(std::move(tt));
+        return ok<TruthTable>(detail::mobius_coefficients_to_tt(values, n_vars_));
     }
 
     BoolePolynomial& raw() { return poly_; }
@@ -161,18 +206,19 @@ public:
     uint32_t n_vars() const { return n_vars_; }
     bool evaluate(const Assignment& assignment) const { return poly_.evaluate(assignment); }
 
+    // См. detail::mobius_coefficients_to_tt выше — тот же фикс, что и в
+    // BRiAl-ветке: O(n * 2^n) вместо O(2^n * размер полинома).
     Result<TruthTable> to_tt() const {
         if (n_vars_ > kMaxTruthTableVars) {
             return fail<TruthTable>(ErrorCode::TooManyVariables, "");
         }
-        TruthTable tt(n_vars_);
-        Assignment assignment(n_vars_, false);
-        const uint64_t rows = uint64_t{1} << n_vars_;
-        for (uint64_t idx = 0; idx < rows; ++idx) {
-            for (uint32_t b = 0; b < n_vars_; ++b) assignment[b] = (idx >> b) & 1u;
-            if (evaluate(assignment)) kitty::set_bit(tt.raw(), idx);
+        std::vector<uint8_t> values(uint64_t{1} << n_vars_, 0);
+        for (const auto& mono : poly_.monomials()) {
+            uint64_t mask = 0;
+            for (uint32_t v : mono) mask |= (uint64_t{1} << v);
+            values[mask] ^= 1;
         }
-        return ok<TruthTable>(std::move(tt));
+        return ok<TruthTable>(detail::mobius_coefficients_to_tt(values, n_vars_));
     }
 
     AnfFallback& raw() { return poly_; }
