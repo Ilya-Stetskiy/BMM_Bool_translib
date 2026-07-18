@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <algorithm>
 #include <iterator>
+#include <bit> // Для std::countr_zero (C++20)
 
 namespace bmm {
 
@@ -39,32 +40,47 @@ Result<TruthTable> thr_to_tt(const Thr& thr) {
     // Количество 64-битных блоков (минимум 1)
     const uint64_t num_blocks = (n < 6) ? 1ULL : (1ULL << (n - 6));
 
-    // OpenMP-распараллеливание (Правило №6 конвенций)
-    #pragma omp parallel for
+    // OpenMP: порог n >= 18. При n < 18 накладные расходы на треды превышают 
+    // пользу от параллелизма (например, для n=8-16 параллельный код медленнее)
+    #pragma omp parallel for if(n >= 18) schedule(static)
     for (int64_t block_idx = 0; block_idx < static_cast<int64_t>(num_blocks); ++block_idx) {
         uint64_t current_block = 0;
         const uint64_t start_minterm = static_cast<uint64_t>(block_idx) << 6;
         
-        // Для n < 6 обрабатываем только 2^n бит, иначе все 64 бита в блоке
-        const uint64_t limit = (n < 6) ? (1ULL << n) : 64ULL;
-
-        for (uint64_t bit_idx = 0; bit_idx < limit; ++bit_idx) {
-            const uint64_t minterm = start_minterm + bit_idx;
-            int64_t sum = 0;
-
-            // LSB_FIRST: переменная v - это v-й бит числа minterm
-            for (uint32_t v = 0; v < n; ++v) {
-                if ((minterm >> v) & 1ULL) {
-                    sum += weights[v];
-                }
-            }
-
-            if (sum >= threshold) {
-                current_block |= (1ULL << bit_idx);
+        // 1. Вычисляем стартовую сумму для блока (по старшим битам >= 6)
+        int64_t current_sum = 0;
+        for (uint32_t v = 6; v < n; ++v) {
+            if ((start_minterm >> v) & 1ULL) {
+                current_sum += weights[v];
             }
         }
         
-        // Запись готового блока напрямую в память (потокобезопасно, т.к. индексы не пересекаются)
+        const uint32_t limit = (n < 6) ? (1U << n) : 64U;
+
+        // 2. Инкрементальный проход кодом Грея внутри 64-битного блока
+        for (uint32_t i = 0; i < limit; ++i) {
+            // g - локальный индекс минтерма (от 0 до 63)
+            const uint32_t g = i ^ (i >> 1); 
+            
+            if (i > 0) {
+                // std::countr_zero дает индекс бита, который изменился на этом шаге
+                const uint32_t changed_bit = std::countr_zero(i);
+                
+                // Проверяем, установился бит в 1 или сбросился в 0
+                if ((g >> changed_bit) & 1U) {
+                    current_sum += weights[changed_bit];
+                } else {
+                    current_sum -= weights[changed_bit];
+                }
+            }
+
+            // Записываем результат: ставим 1 на место g, если порог достигнут
+            if (current_sum >= threshold) {
+                current_block |= (1ULL << g);
+            }
+        }
+        
+        // Запись готового блока напрямую в память
         tt_data[block_idx] = current_block;
     }
 

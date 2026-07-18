@@ -1,5 +1,5 @@
 #include "thr/thr_to_aig.hpp"
-
+#include <tbb/spin_mutex.h>
 #include <mockturtle/networks/aig.hpp>
 #include <tbb/task_group.h>
 #include <tbb/concurrent_hash_map.h>
@@ -86,14 +86,16 @@ Result<Aig> thr_to_aig(const Thr& thr) {
         // Разрядность для хранения сумм (B)
         int B = max_sum > 0 ? (64 - __builtin_clzll(max_sum)) : 1;
 
-        std::mutex ntk_mutex;
-        
+        tbb::spin_mutex ntk_mutex;
+
         auto safe_not = [&](Signal a) {
+            // create_not безопасен без лока, он только инвертирует младший бит сигнала
             return ntk.create_not(a);
         };
-        
+
         auto safe_and = [&](Signal a, Signal b) {
-            std::lock_guard<std::mutex> lock(ntk_mutex);
+            // Используем scoped_lock от спин-мьютекса
+            tbb::spin_mutex::scoped_lock lock(ntk_mutex);
             return ntk.create_and(a, b);
         };
         
@@ -162,10 +164,17 @@ Result<Aig> thr_to_aig(const Thr& thr) {
             int mid = l + (r - l) / 2;
             std::vector<Signal> left_sum, right_sum;
             
-            tbb::task_group tg;
-            tg.run([&]() { left_sum = build_tree(l, mid); });
-            tg.run([&]() { right_sum = build_tree(mid + 1, r); });
-            tg.wait();
+            // ПОРОГ ОТСЕЧЕНИЯ: если переменных меньше 4, считаем последовательно
+            if (r - l < 4) {
+                left_sum = build_tree(l, mid);
+                right_sum = build_tree(mid + 1, r);
+            } else {
+                // Для больших задач используем TBB
+                tbb::task_group tg;
+                tg.run([&]() { left_sum = build_tree(l, mid); });
+                tg.run([&]() { right_sum = build_tree(mid + 1, r); });
+                tg.wait();
+            }
             
             return add_bitvectors(left_sum, right_sum);
         };
