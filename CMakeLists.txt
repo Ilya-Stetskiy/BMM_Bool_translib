@@ -293,8 +293,18 @@ target_link_libraries(test_core PRIVATE bmm_core bmm_verify Catch2::Catch2)
 # итерации задания) — bmm_aig/bmm_anf линкуют TBB::tbb как PRIVATE, это не
 # распространяется транзитивно на test_aig/test_anf, поэтому линкуем явно.
 target_link_libraries(test_aig PRIVATE TBB::tbb)
-target_link_libraries(test_anf PRIVATE TBB::tbb)
+target_link_libraries(test_anf PRIVATE TBB::tbb OpenMP::OpenMP_CXX)
 target_link_libraries(test_thr PRIVATE OpenMP::OpenMP_CXX)
+
+# ВРЕМЕННЫЙ таргет для anf/bench_real_corpus.cpp (см. комментарий в файле) —
+# удаляется вместе с самим .cpp после того, как числа записаны в anf/README.md.
+add_executable(bench_real_corpus anf/bench_real_corpus.cpp)
+target_link_libraries(bench_real_corpus PRIVATE bmm_anf bmm_core)
+
+# ПОСТОЯННЫЙ таргет для thr/bench_real_corpus.cpp (см. комментарий в файле —
+# тот же принцип "не удаляется", что и у anf/bench_real_corpus.cpp).
+add_executable(bench_real_corpus_thr thr/bench_real_corpus.cpp)
+target_link_libraries(bench_real_corpus_thr PRIVATE bmm_thr bmm_core)
 
 include(CTest)
 include(Catch)
