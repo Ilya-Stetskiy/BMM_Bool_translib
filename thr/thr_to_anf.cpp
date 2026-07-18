@@ -5,6 +5,10 @@
 #include <vector>
 #include <omp.h>
 
+#if BMM_HAVE_BRIAL
+#include <polybori/polybori.h>
+#endif
+
 namespace bmm {
 
 Result<Anf> thr_to_anf(const Thr& thr) {
@@ -77,35 +81,45 @@ Result<Anf> thr_to_anf(const Thr& thr) {
         
         for (uint64_t i = 0; i < size; ++i) {
             if (tt[i]) {
-                polybori::BoolePolynomial m(ring.one());
+                // Создаем BooleExponent заново на каждой итерации.
+                // У него есть reserve() и push_back(), но нет clear(), 
+                // поэтому локальное создание — самый чистый обход API PolyBoRi.
+                polybori::BooleExponent vars;
+                vars.reserve(n);
+                
+                // Заполняем индексы в порядке возрастания
                 for (uint32_t b = 0; b < n; ++b) {
                     if ((i >> b) & 1) {
-                        m = m * ring.variable(b);
+                        vars.push_back(b);
                     }
                 }
-                poly = poly + m;
+                
+                // Создаем моном за один вызов, обходя C++ operator*
+                poly = poly + polybori::BooleMonomial(vars, ring);
             }
         }
         return ok(Anf(std::move(poly), n));
 #else
-        AnfFallback poly;
+        // Fallback-реализация для систем без BRIAL/PolyBoRi
+        AnfFallback p;
         for (uint64_t i = 0; i < size; ++i) {
             if (tt[i]) {
-                Monomial m;
+                std::vector<uint32_t> vars;
+                vars.reserve(n);
                 for (uint32_t b = 0; b < n; ++b) {
-                    if ((i >> b) & 1) m.push_back(b);
+                    if ((i >> b) & 1) {
+                        vars.push_back(b);
+                    }
                 }
-                poly.add_monomial(m); // add_monomial делает std::sort, вектор уже отсортирован
+                p.add_monomial(vars);
             }
         }
-        return ok(Anf(std::move(poly), n));
+        return ok(Anf(std::move(p), n));
 #endif
-
-    } catch (const std::bad_alloc&) {
-        // Правило 2а: Graceful degradation при нехватке памяти 
-        return fail<Anf>(ErrorCode::OutOfMemory, "OutOfMemory: исчерпана память при построении ANF");
+    } catch (const std::exception& e) {
+        return fail<Anf>(ErrorCode::OutOfMemory, e.what()); // Using known ErrorCode from earlier constraint check
     } catch (...) {
-        return fail<Anf>(ErrorCode::OutOfMemory, "OutOfMemory/Exception: неизвестная ошибка аллокации");
+        return fail<Anf>(ErrorCode::OutOfMemory, "thr_to_anf: Unknown exception caught");
     }
 }
 
