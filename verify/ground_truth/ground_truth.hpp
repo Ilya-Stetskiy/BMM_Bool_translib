@@ -27,7 +27,7 @@
 
 namespace bmm::verify {
 
-inline constexpr uint32_t kMaxGroundTruthVars = 12;
+inline constexpr uint32_t kMaxGroundTruthVars = 16;
 
 // LSB_FIRST-декодирование индекса минтерма в присвоение переменным — та же
 // конвенция, что и BitOrder::LSB_FIRST в core/common.hpp (см. CONVENTIONS.md

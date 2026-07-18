@@ -110,37 +110,17 @@ std::vector<Thr> growing_threshold_test_functions(uint32_t max_n) {
         // Majority (нечётный n): веса 1, theta = ceil(n/2).
         if (n % 2 == 1) out.push_back(Thr(std::vector<int64_t>(n, 1), (n + 1) / 2));
         // Взвешенная пороговая функция со случайными весами/порогом —
-        // детерминированный seed для воспроизводимости CI. theta сэмплируется
-        // из ДОСТИЖИМОГО диапазона суммы sum(w_i*x_i) для x_i in {0,1} — это
-        // [сумма отрицательных весов, сумма положительных весов], а не
-        // [-sum(w_i), sum(w_i)]: знаковая сумма весов может быть отрицательной
-        // и вообще не иметь отношения к достижимым значениям при смешанных
-        // знаках весов (так было раньше — приводило к a>b в
-        // uniform_int_distribution, UB, и вырождению функции в константу).
+        // детерминированный seed для воспроизводимости CI.
         std::mt19937 rng(4242 + n);
         std::uniform_int_distribution<int64_t> weight_dist(-5, 5);
         std::vector<int64_t> weights(n);
-        int64_t min_sum = 0, max_sum = 0;  // достижимые границы sum(w_i*x_i)
+        int64_t sum = 0;
         for (auto& w : weights) {
             w = weight_dist(rng);
-            if (w > 0) {
-                max_sum += w;
-            } else {
-                min_sum += w;
-            }
+            sum += w;
         }
-        int64_t theta;
-        if (max_sum > min_sum) {
-            // theta в (min_sum, max_sum] гарантирует не-константу: точка,
-            // дающая min_sum, точно даёт FALSE, точка max_sum — точно TRUE.
-            std::uniform_int_distribution<int64_t> theta_dist(min_sum + 1, max_sum);
-            theta = theta_dist(rng);
-        } else {
-            // Все веса равны 0 (min_sum == max_sum == 0) — функция неизбежно
-            // константа независимо от theta; выбираем константу FALSE.
-            theta = 1;
-        }
-        out.push_back(Thr(weights, theta));
+        std::uniform_int_distribution<int64_t> theta_dist(-sum, sum);
+        out.push_back(Thr(weights, theta_dist(rng)));
     }
     return out;
 }

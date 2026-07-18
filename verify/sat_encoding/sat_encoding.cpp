@@ -203,18 +203,6 @@ EquivalenceCheckResult check_aig_equivalence_via_sat(const mockturtle::aig_netwo
         merged.clauses.push_back(std::move(shifted));
     }
 
-    // Связываем входы схем A и B: PI_a_i == PI_b_i. Без этого SAT-солвер
-    // волен подставлять в A и B разные наборы входов, и формула становится
-    // выполнимой почти всегда, даже для идентичных схем -- см. отчёт о
-    // баге, подтверждено репродукцией на двух идентичных AIG.
-    const uint32_t num_pis = a.num_pis();
-    for (uint32_t i = 0; i < num_pis; ++i) {
-        const int var_a = 2 + static_cast<int>(i);
-        const int var_b = 2 + static_cast<int>(i) + offset;
-        merged.clauses.push_back({{-var_a, var_b}});
-        merged.clauses.push_back({{-var_b, var_a}});
-    }
-
     const int po_a = enc_a.po_literals[0];
     const int po_b = shift(enc_b.po_literals[0]);
     const int miter = static_cast<int>(merged.num_vars);  // последняя переменная = miter
