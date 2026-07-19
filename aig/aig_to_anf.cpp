@@ -8,8 +8,10 @@
 #include <mutex>
 #include <memory>
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <optional>
+#include <string>
 
 namespace bmm {
 
@@ -108,6 +110,52 @@ BoolePolyRing& get_ring(uint32_t n) {
 } // namespace
 #endif
 
+namespace {
+// НАЙДЕНО этой сессией на РЕАЛЬНЫХ данных (не синтетике): aig_to_anf не
+// укладывается в разумное время (>180с) как на EPFL router.aig (n=60,
+// комбинационная логика, ВСЕГО 317 гейтов), так и на AIG, построенном из
+// плотного реального ANF n=100/M=10000 (persons.iis.nsk.su) — 73646 гейтов.
+// В отличие от краха в anf_to_bdd (Lace dqsize — исправлено выше по коду
+// сессии, чисто инженерная недостача ресурса), здесь причина СТРУКТУРНАЯ и
+// НЕ чинится перенастройкой: mul_poly на AND-гейте — это полное умножение
+// полиномов Жегалкина, и представление сложной булевой функции в ANF в
+// общем случае может требовать экспоненциально много мономов относительно
+// размера AIG (тот же класс задачи, что и структурный взрыв BDD в
+// anf_to_bdd/aig_to_bdd, только с другой стороны — здесь взрывается не BDD,
+// а сам целевой ANF).
+//
+// ВАЖНО про router.aig (317 гейтов) — доказывает, что СТАТИЧЕСКАЯ проверка
+// по числу гейтов/переменных AIG (аналог kMaxTruthTableVars) здесь
+// принципиально не работает: маленькая схема тоже может дать
+// экспоненциальный ANF, а большая (73646 гейтов) — не обязана (могла бы
+// иметь компактный ANF при удачной структуре). Единственный надёжный сигнал
+// — фактическое время выполнения, не догадки по входу заранее.
+//
+// Также опробовано (эмпирически, НЕ помогло — оставлено ниже как
+// дополнительный дешёвый слой, но не основной механизм): проверка размера
+// результата ПОСЛЕ mul_poly и проверка произведения длин операндов ПЕРЕД
+// mul_poly — обе не останавливали реальный датасет n=100/73646 гейтов,
+// потому что ни на одном отдельном гейте нет одной "катастрофической"
+// операции — цена накапливается из процентов-накладных расходов BRiAl на
+// КАЖДОМ из десятков тысяч гейтов, а не взрывается на одном конкретном.
+//
+// Рабочий фикс — дедлайн по РЕАЛЬНОМУ времени (см. kAigToAnfTimeBudget):
+// проверяется периодически в ходе обхода, не зависит от того, ГДЕ именно
+// накапливается стоимость (один гейт или все понемногу) — единственный
+// вариант, который эмпирически подтверждённо останавливает оба реальных
+// случая, а не "почти всегда работающая" структурная эвристика. Бюджет —
+// заведомо больше, чем занимают все известные успешные случаи в тестах/
+// датасетах этой сессии (единицы-сотни МИЛЛИсекунд), но достаточно мал,
+// чтобы не ждать минуты/часы там, где ответ реально экспоненциален.
+constexpr auto kAigToAnfTimeBudget = std::chrono::seconds(10);
+
+// Оставлено как дешёвый дополнительный слой (не основной механизм — см.
+// выше): отлавливает случай одного явно катастрофического умножения без
+// необходимости ждать следующей проверки дедлайна.
+constexpr uint64_t kMaxAnfMonomialsDuringConstruction = 1'000'000;
+constexpr uint64_t kMaxAnfMultiplyOperandProduct = 4ULL * 1'000'000;
+}  // namespace
+
 Result<Anf> aig_to_anf(const Aig& aig) {
     ZoneScoped;
     const auto& net = aig.raw();
@@ -143,7 +191,26 @@ Result<Anf> aig_to_anf(const Aig& aig) {
 
     const PolType one_poly = make_one(ring);
 
-    net.foreach_gate([&](auto node) {
+    // Лямбда возвращает bool: false прерывает foreach_gate ДОСРОЧНО (см.
+    // mockturtle::detail::foreach_element_if в networks/detail/foreach.hpp)
+    // — используется, чтобы остановиться сразу, как только либо превышен
+    // временной бюджет (основной механизм, см. kAigToAnfTimeBudget выше),
+    // либо (дополнительно, дёшево) промежуточный ANF на каком-то гейте уже
+    // явно неправдоподобно большой.
+    bool exploded = false;
+    const auto deadline = std::chrono::steady_clock::now() + kAigToAnfTimeBudget;
+    // Проверка дедлайна раз в 256 гейтов — достаточно часто (единственный
+    // катастрофически долгий гейт всё равно ловится дополнительной
+    // проверкой произведения длин операндов ниже, ДО вызова mul_poly), но
+    // не добавляет заметных накладных расходов на steady_clock::now() при
+    // десятках тысяч гейтов.
+    uint64_t gates_processed = 0;
+    net.foreach_gate([&](auto node) -> bool {
+        if ((++gates_processed & 0xFFu) == 0 && std::chrono::steady_clock::now() > deadline) {
+            exploded = true;
+            return false;
+        }
+
         std::array<mockturtle::aig_network::signal, 2> fanins{};
         uint32_t k = 0;
         net.foreach_fanin(node, [&](auto signal) { fanins[k++] = signal; });
@@ -155,8 +222,32 @@ Result<Anf> aig_to_anf(const Aig& aig) {
 
         PolType p0 = get_signal_poly(fanins[0]);
         PolType p1 = get_signal_poly(fanins[1]);
-        node_polys[net.node_to_index(node)] = mul_poly(p0, p1);
+
+        const uint64_t len0 = static_cast<uint64_t>(p0.length());
+        const uint64_t len1 = static_cast<uint64_t>(p1.length());
+        if (len0 != 0 && len1 != 0 && len0 * len1 > kMaxAnfMultiplyOperandProduct) {
+            exploded = true;
+            return false;
+        }
+
+        PolType& result = node_polys[net.node_to_index(node)];
+        result = mul_poly(p0, p1);
+
+        if (static_cast<uint64_t>(result.length()) > kMaxAnfMonomialsDuringConstruction) {
+            exploded = true;
+            return false;
+        }
+        return true;
     });
+
+    if (exploded) {
+        return fail<Anf>(ErrorCode::OutOfMemory,
+                          "aig_to_anf: превышен бюджет времени (" +
+                              std::to_string(kAigToAnfTimeBudget.count()) +
+                              "с) или размер промежуточного ANF — прервано до фактического "
+                              "зависания/исчерпания памяти (структурный взрыв ANF-представления, "
+                              "не чинится порядком обхода)");
+    }
 
     mockturtle::aig_network::signal po_sig;
     net.foreach_po([&](auto signal) { po_sig = signal; });
@@ -198,7 +289,32 @@ Result<Anf> aig_to_anf(const Aig& aig) {
         index_to_node[net.node_to_index(node)] = node;
     });
 
+    // exploded — тот же предохранитель, что и в BRiAl-ветке выше (см.
+    // kAigToAnfTimeBudget/kMaxAnfMonomialsDuringConstruction и комментарий
+    // там): здесь атомарный флаг, а не ранний выход из foreach_gate, потому
+    // что обход рекурсивный и параллельный (tbb::task_group) — после того
+    // как флаг выставлен, дальнейшие вызовы get_anf_rec немедленно
+    // возвращают пустой полином вместо продолжения работы (не останавливает
+    // уже запущенные parallel TBB-задачи мгновенно, но не даёт им порождать
+    // новые). Дедлайн — тот же основной механизм, что в BRiAl-ветке (см.
+    // комментарий у kAigToAnfTimeBudget): статические проверки размера сами
+    // по себе недостаточны (empирически не останавливали реальный датасет
+    // n=100/73646 гейтов — накопление стоимости по многим мелким узлам, а
+    // не один катастрофический), оставлены только как дешёвый доп. слой.
+    std::atomic<bool> exploded{false};
+    const auto deadline = std::chrono::steady_clock::now() + kAigToAnfTimeBudget;
+    std::atomic<uint64_t> calls_made{0};
+
     std::function<PolType(uint32_t)> get_anf_rec = [&](uint32_t node_idx) -> PolType {
+        if (exploded.load(std::memory_order_relaxed)) {
+            return make_zero();
+        }
+        if ((calls_made.fetch_add(1, std::memory_order_relaxed) & 0xFFu) == 0 &&
+            std::chrono::steady_clock::now() > deadline) {
+            exploded.store(true, std::memory_order_relaxed);
+            return make_zero();
+        }
+
         if (node_idx == const_node_idx) {
             return make_zero();
         }
@@ -239,7 +355,24 @@ Result<Anf> aig_to_anf(const Aig& aig) {
         PolType p0_val = apply_comp(*p0, net.is_complemented(fanins[0]));
         p1 = apply_comp(p1, net.is_complemented(fanins[1]));
 
+        // Проверка ПЕРЕД умножением — см. kMaxAnfMultiplyOperandProduct и
+        // комментарий у BRiAl-ветки выше: сам вызов mul_poly может быть
+        // катастрофически долгим ДО возврата, если операнды уже большие
+        // (здесь — явный O(len0*len1) вложенный цикл в mul_poly фолбэка,
+        // см. начало файла — оценка точная, не эвристическая, в отличие от
+        // BRiAl-ветки).
+        const uint64_t len0 = static_cast<uint64_t>(p0_val.monomials().size());
+        const uint64_t len1 = static_cast<uint64_t>(p1.monomials().size());
+        if (len0 != 0 && len1 != 0 && len0 * len1 > kMaxAnfMultiplyOperandProduct) {
+            exploded.store(true, std::memory_order_relaxed);
+            return make_zero();
+        }
+
         PolType res = mul_poly(p0_val, p1);
+
+        if (res.monomials().size() > kMaxAnfMonomialsDuringConstruction) {
+            exploded.store(true, std::memory_order_relaxed);
+        }
 
         {
             std::lock_guard<std::mutex> lock(entry->mtx);
@@ -256,6 +389,15 @@ Result<Anf> aig_to_anf(const Aig& aig) {
 
     uint32_t po_node_idx = net.node_to_index(net.get_node(po_sig));
     PolType final_poly = get_anf_rec(po_node_idx);
+
+    if (exploded.load(std::memory_order_relaxed)) {
+        return fail<Anf>(ErrorCode::OutOfMemory,
+                          "aig_to_anf: превышен бюджет времени (" +
+                              std::to_string(kAigToAnfTimeBudget.count()) +
+                              "с) или размер промежуточного ANF — прервано до фактического "
+                              "зависания/исчерпания памяти (структурный взрыв ANF-представления, "
+                              "не чинится порядком обхода)");
+    }
 
     if (net.is_complemented(po_sig)) {
         final_poly = add_poly(final_poly, make_one());

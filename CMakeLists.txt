@@ -96,6 +96,15 @@ else()
                     "(BMM_HAVE_BRIAL=0, см. core/CONVENTIONS.md п.5)")
 endif()
 
+# CUDD (+ встроенный dddmp) — отдельно от BRiAl: BRiAl использует CUDD внутри
+# себя, но не экспортирует Dddmp_*-символы наружу через свою библиотеку,
+# поэтому для моста DDDMP->Sylvan (verify/diag_dddmp_probe.cpp и далее) нужна
+# прямая линковка на libcudd.
+find_path(CUDD_INCLUDE_DIR NAMES cudd.h
+    PATHS /usr/local/include /usr/include)
+find_library(CUDD_LIBRARY NAMES cudd
+    PATHS /usr/local/lib /usr/lib)
+
 # ---------------------------------------------------------------------------
 # TBB (aig/*, anf/*) — НЕ входит в текущий .devcontainer-образ (см.
 # coder-deploy/workspace-image/Dockerfile — libtbb-dev не ставится).
@@ -349,6 +358,53 @@ target_link_libraries(test_real_datasets PRIVATE bmm_aig bmm_bdd bmm_anf bmm_thr
 target_compile_definitions(test_real_datasets PRIVATE FMT_HEADER_ONLY)
 add_test(NAME real_datasets_tests COMMAND test_real_datasets
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# ВРЕМЕННЫЙ таргет этой сессии — проверка парсера benchmarks/
+# anf_dimacs_loader.hpp на реальном ANF-корпусе (persons.iis.nsk.su,
+# n=100/M=10000). Не таргет ctest, не коммитится.
+add_executable(diag_anf_dataset verify/diag_anf_dataset.cpp)
+target_link_libraries(diag_anf_dataset PRIVATE bmm_aig bmm_anf bmm_verify bmm_core
+                                                TBB::tbb OpenMP::OpenMP_CXX ortools::ortools)
+
+add_executable(diag_anf_to_bdd_dataset verify/diag_anf_to_bdd_dataset.cpp)
+target_link_libraries(diag_anf_to_bdd_dataset PRIVATE bmm_anf bmm_bdd bmm_core TBB::tbb)
+
+# ВРЕМЕННЫЙ таргет этой сессии — проверка cnf_to_aig (benchmarks/
+# cnf_dimacs_loader.hpp) на реальном корпусе DIMACS CNF, независимая
+# проверка через внешний SAT-солвер (verify/sat_encoding). Не таргет ctest,
+# не коммитится.
+add_executable(diag_cnf_dataset verify/diag_cnf_dataset.cpp)
+target_link_libraries(diag_cnf_dataset PRIVATE bmm_aig bmm_verify bmm_core TBB::tbb)
+
+add_executable(diag_cnf_chain_dataset verify/diag_cnf_chain_dataset.cpp)
+target_link_libraries(diag_cnf_chain_dataset PRIVATE bmm_aig bmm_bdd bmm_anf bmm_thr bmm_verify
+                                                      bmm_core TBB::tbb OpenMP::OpenMP_CXX
+                                                      ortools::ortools)
+
+if(CUDD_INCLUDE_DIR AND CUDD_LIBRARY)
+    add_executable(diag_dddmp_probe verify/diag_dddmp_probe.cpp)
+    # benchmarks/cudd_stubs ПЕРЕД системным путём — см. benchmarks/
+    # cudd_stubs/util.h за объяснением (dddmp.h требует util.h, которого нет
+    # в этом образе, но фактически не использует ничего из него).
+    target_include_directories(diag_dddmp_probe PRIVATE benchmarks/cudd_stubs "${CUDD_INCLUDE_DIR}")
+    target_link_libraries(diag_dddmp_probe PRIVATE "${CUDD_LIBRARY}")
+
+    add_executable(diag_dddmp_dataset verify/diag_dddmp_dataset.cpp)
+    target_include_directories(diag_dddmp_dataset PRIVATE benchmarks/cudd_stubs "${CUDD_INCLUDE_DIR}")
+    target_link_libraries(diag_dddmp_dataset PRIVATE bmm_aig bmm_bdd bmm_verify bmm_core
+                                                      "${CUDD_LIBRARY}" TBB::tbb)
+    target_compile_definitions(diag_dddmp_dataset PRIVATE FMT_HEADER_ONLY)
+
+    add_executable(diag_dddmp_sweep verify/diag_dddmp_sweep.cpp)
+    target_include_directories(diag_dddmp_sweep PRIVATE benchmarks/cudd_stubs "${CUDD_INCLUDE_DIR}")
+    target_link_libraries(diag_dddmp_sweep PRIVATE bmm_bdd bmm_core "${CUDD_LIBRARY}" TBB::tbb)
+
+    add_executable(diag_anf_sample_dump verify/diag_anf_sample_dump.cpp)
+    target_link_libraries(diag_anf_sample_dump PRIVATE bmm_anf bmm_core TBB::tbb
+                                                        OpenMP::OpenMP_CXX ortools::ortools)
+else()
+    message(STATUS "CUDD (libcudd) не найден — diag_dddmp_probe/мост DDDMP->Sylvan недоступны")
+endif()
 
 # ---------------------------------------------------------------------------
 # status — прогоняет все 4 тестовых бинаря + bmm_config_dump, генерирует

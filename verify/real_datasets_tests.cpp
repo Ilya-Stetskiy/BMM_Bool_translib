@@ -348,6 +348,23 @@ bool bdd_target_is_force_protected(Repr source) {
     return source == Repr::Aig;
 }
 
+// aig_to_anf получил дедлайн по времени (kAigToAnfTimeBudget=10с, см. aig/
+// aig_to_anf.cpp) — ИСПРАВЛЕНА находка, задокументированная в комментарии
+// выше про "aig_to_anf... не укладывается в разумное время": раньше эта
+// функция зависала (>180с) на router.aig (317 гейтов) и на AIG, построенном
+// из реального плотного ANF n=100 (verify/diag_anf_dataset.cpp, той же
+// сессии), теперь возвращает честный Result-отказ за секунды. Поэтому Anf
+// как цель для source==Aig больше не относится к общему предохранителю —
+// router.aig теперь реально проверяется (получает FAIL с понятным
+// сообщением вместо зависания всего процесса).
+//
+// bdd_to_anf/thr_to_anf сюда НЕ входят — дедлайн добавлен только в
+// aig_to_anf, для остальных путей в Anf аналогичный риск не исследовался в
+// этой сессии.
+bool anf_target_is_deadline_protected(Repr source) {
+    return source == Repr::Aig;
+}
+
 void run_single_function_checks(Report& rep, const std::vector<Dataset>& datasets) {
     rep.section("1. Отдельные функции перевода на реальных данных (X -> Y, "
                 "X — естественное представление датасета)");
@@ -358,21 +375,17 @@ void run_single_function_checks(Report& rep, const std::vector<Dataset>& dataset
         for (Repr to : kAll) {
             if (to == ds.repr) continue;
             const bool bdd_ok = (to == Repr::Bdd) && bdd_target_is_force_protected(ds.repr);
-            if (!ds.exhaustive && to != Repr::Tt && to != Repr::Thr && !bdd_ok) {
+            const bool anf_ok = (to == Repr::Anf) && anf_target_is_deadline_protected(ds.repr);
+            if (!ds.exhaustive && to != Repr::Tt && to != Repr::Thr && !bdd_ok && !anf_ok) {
                 // ПРЕДОХРАНИТЕЛЬ: для больших (не exhaustive) реальных
                 // датасетов допускаем только переводы в Tt/Thr (у обоих есть
                 // дешёвая статическая проверка n <= лимита, отказ быстрый и
-                // безопасный) и в Bdd — но ТОЛЬКО если source Aig/Anf, чей
-                // aig_to_bdd/anf_to_bdd защищён FORCE-эвристикой порядка
-                // переменных и эмпирически проверен на router.aig (см.
-                // bdd_target_is_force_protected выше). Anf НЕ входит в
-                // список разрешённых целей: aig_to_anf на реальной (не
-                // синтетической) схеме такого размера эмпирически показал,
-                // что может не укладываться в разумное время (в отличие от
-                // более раннего вывода в aig/README.md "не найдено ни
-                // одного отказа", полученного только на синтетических
-                // семействах chain/star/block/mux/random) — для него
-                // никакой аналогичной защиты не существует. Гонять
+                // безопасный), в Bdd при source Aig (aig_to_bdd защищён
+                // FORCE-эвристикой, см. bdd_target_is_force_protected) и в
+                // Anf при source Aig (aig_to_anf защищён дедлайном по
+                // времени, см. anf_target_is_deadline_protected). Остальные
+                // пути в Bdd/Anf (и вообще все не-Tt/Thr цели для прочих
+                // source) никакой аналогичной защиты не имеют. Гонять
                 // непроверенные случаи в АВТОМАТИЧЕСКОМ, не присматриваемом
                 // прогоне (ctest) — риск уронить/подвесить весь тестовый
                 // бинарник без возможности поймать это изнутри процесса.
@@ -381,7 +394,7 @@ void run_single_function_checks(Report& rep, const std::vector<Dataset>& dataset
                 // рекомендует anf/README.md §2.
                 rep.line("- SKIP " + ds.name + ": " + repr_name(ds.repr) + "->" + repr_name(to) +
                          " (пропущено намеренно — предохранитель: для большого n без известной "
-                         "структуры разрешены только Tt/Thr/Bdd-с-FORCE-защитой)");
+                         "структуры разрешены только Tt/Thr/Bdd-с-FORCE-защитой/Anf-с-дедлайном)");
                 continue;
             }
             auto t0 = std::chrono::steady_clock::now();
@@ -440,11 +453,12 @@ void run_round_trip_checks(Report& rep, const std::vector<Dataset>& datasets) {
         for (Repr via : kAll) {
             if (via == ds.repr) continue;
             const bool bdd_ok = (via == Repr::Bdd) && bdd_target_is_force_protected(ds.repr);
-            if (!ds.exhaustive && via != Repr::Tt && via != Repr::Thr && !bdd_ok) {
+            const bool anf_ok = (via == Repr::Anf) && anf_target_is_deadline_protected(ds.repr);
+            if (!ds.exhaustive && via != Repr::Tt && via != Repr::Thr && !bdd_ok && !anf_ok) {
                 // Тот же предохранитель, что и в run_single_function_checks —
                 // см. комментарий там (для больших датасетов разрешены
-                // промежуточные Tt/Thr и Bdd-с-FORCE-защитой при source
-                // Aig/Anf; Anf как промежуточное представление — нет).
+                // промежуточные Tt/Thr, Bdd-с-FORCE-защитой и Anf-с-
+                // дедлайном при source Aig).
                 rep.line("- SKIP " + ds.name + ": " + repr_name(ds.repr) + "->" + repr_name(via) +
                          "->" + repr_name(ds.repr) + " (пропущено намеренно — предохранитель)");
                 continue;
@@ -509,7 +523,10 @@ VOID_TASK_0(real_datasets_main) {
 
 int main() {
     const int n_workers = 0;
-    const size_t deque_size = 0;
+    // deque_size=1<<21 — см. подробное обоснование в verify/test_main.cpp
+    // (эмпирически найденный и исправленный крах "Lace fatal error: Task
+    // stack overflow" на реальном плотном ANF n=100/M=10000).
+    const size_t deque_size = 1ULL << 21;
     lace_start(n_workers, deque_size);
     RUN(real_datasets_main);
     lace_stop();

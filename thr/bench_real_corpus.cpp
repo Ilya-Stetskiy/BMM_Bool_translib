@@ -281,7 +281,10 @@ VOID_TASK_0(run_all_task) {
 
 int main() {
     const int n_workers = 0;
-    const size_t deque_size = 0;
+    // deque_size=1<<21 — см. подробное обоснование в verify/test_main.cpp
+    // (эмпирически найденный и исправленный крах "Lace fatal error: Task
+    // stack overflow" на реальном плотном ANF n=100/M=10000).
+    const size_t deque_size = 1ULL << 21;
     lace_start(n_workers, deque_size);
     RUN(run_all_task);
     lace_stop();
