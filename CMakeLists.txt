@@ -378,6 +378,16 @@ target_link_libraries(diag_anf_dataset PRIVATE bmm_aig bmm_anf bmm_verify bmm_co
 add_executable(diag_anf_to_bdd_dataset verify/diag_anf_to_bdd_dataset.cpp)
 target_link_libraries(diag_anf_to_bdd_dataset PRIVATE bmm_anf bmm_bdd bmm_core TBB::tbb)
 
+# Офлайн-генератор bdd/chow_database_generated.inc (см. bdd/chow_detail.hpp,
+# bdd/README.md §5.4а) — перебор весов + исчерпывающий перебор всех
+# монотонных функций K<=6 переменных со сверкой каждого расхождения против
+# независимого ILP-оракула tt_to_thr. Не таргет ctest (выполняется вручную,
+# результат коммитится как сгенерированный .inc-файл, не пересобирается на
+# каждом прогоне).
+add_executable(diag_chow_database_gen verify/diag_chow_database_gen.cpp)
+target_link_libraries(diag_chow_database_gen PRIVATE bmm_thr bmm_core
+                                                      OpenMP::OpenMP_CXX TBB::tbb ortools::ortools)
+
 # ВРЕМЕННЫЙ таргет этой сессии — проверка cnf_to_aig (benchmarks/
 # cnf_dimacs_loader.hpp) на реальном корпусе DIMACS CNF, независимая
 # проверка через внешний SAT-солвер (verify/sat_encoding). Не таргет ctest,

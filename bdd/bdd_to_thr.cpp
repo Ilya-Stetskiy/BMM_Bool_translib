@@ -1,4 +1,5 @@
 #include "bdd_to_thr.hpp"
+#include "chow_detail.hpp"
 
 #include <tracy/Tracy.hpp>
 #include <sylvan_obj.hpp>
@@ -14,6 +15,14 @@
 namespace bmm {
 
 namespace detail {
+
+using chow_detail::GlobalChow;
+using chow_detail::compute_chow_from_tt;
+using chow_detail::is_unate_from_tt;
+using chow_detail::verify_threshold_from_tt;
+using chow_detail::ChowKey;
+using chow_detail::DbEntry;
+using chow_detail::pack_key;
 
 enum class ThresholdStatus {
     Threshold,
@@ -67,132 +76,20 @@ uint64_t build_truth_table(
 }
 
 // ============================================================================
-// 2. Вычисление Chow напрямую из Truth Table
+// 2-4. Chow-параметры, унитарность, финальная верификация — общая логика,
+// см. chow_detail.hpp (используется и здесь, и в генераторе базы,
+// verify/diag_chow_database_gen.cpp — буквально одна и та же реализация).
 // ============================================================================
-struct GlobalChow {
-    uint32_t sat;
-    std::array<uint32_t, 6> ci;
-};
-
-GlobalChow compute_chow_from_tt(uint64_t truth, int K) {
-    GlobalChow chow;
-    chow.sat = static_cast<uint32_t>(std::popcount(truth));
-    chow.ci.fill(0);
-
-    uint64_t limit = 1ULL << K;
-    for (uint64_t m = 0; m < limit; ++m) {
-        if ((truth >> m) & 1) {
-            for (int i = 0; i < K; ++i) {
-                if ((m >> i) & 1) {
-                    ++chow.ci[i];
-                }
-            }
-        }
-    }
-    return chow;
-}
-
-// ============================================================================
-// 3. Проверка унитарности по Truth Table
-// ============================================================================
-bool is_unate_from_tt(uint64_t truth, int K, std::array<bool, 6>& is_negative) {
-    uint64_t limit = 1ULL << K;
-
-    for (int i = 0; i < K; ++i) {
-        bool pos = true, neg = true;
-        for (uint64_t m = 0; m < limit; ++m) {
-            if (((m >> i) & 1) == 0) continue;
-
-            uint64_t m0 = m & ~(1ULL << i);
-            uint64_t m1 = m0 | (1ULL << i);
-
-            bool v0 = (truth >> m0) & 1;
-            bool v1 = (truth >> m1) & 1;
-
-            if (v0 && !v1) pos = false;
-            if (v1 && !v0) neg = false;
-            if (!pos && !neg) return false;
-        }
-        is_negative[i] = (neg && !pos);
-    }
-    return true;
-}
-
-// ============================================================================
-// 4. Финальная верификация (ГАРАНТИЯ ОТСУТСТВИЯ FALSE POSITIVES)
-// ============================================================================
-bool verify_threshold_from_tt(
-    uint64_t truth,
-    const std::vector<int64_t>& weights,
-    int64_t threshold,
-    int K
-) {
-    uint64_t limit = 1ULL << K;
-    for (uint64_t m = 0; m < limit; ++m) {
-        bool bdd_val = (truth >> m) & 1;
-        int64_t sum = 0;
-        for (int i = 0; i < K; ++i) {
-            if ((m >> i) & 1) sum += weights[i];
-        }
-        if (bdd_val != (sum >= threshold)) {
-            return false;
-        }
-    }
-    return true;
-}
 
 // ============================================================================
 // 5. База данных и Lookup
 // ============================================================================
-using ChowKey = uint64_t;
-
-struct DbEntry {
-    ChowKey key;
-    std::array<int32_t, 6> weights;
-    int32_t threshold;
-    uint8_t k;
-};
-
-inline constexpr ChowKey pack_key(int k, int c0, const std::array<int, 6>& sorted_canon) {
-    static_assert(64 < 128, "Chow parameter exceeds 7-bit capacity");
-    ChowKey key = (static_cast<uint64_t>(k) << 49) | (static_cast<uint64_t>(c0) << 42);
-    for (int i = 0; i < k; ++i) {
-        key |= (static_cast<uint64_t>(sorted_canon[i]) << (35 - i * 7));
-    }
-    return key;
-}
-
-// База расширена до K=2, чтобы покрыть базовые функции (AND, OR, проекции)
 //
-// ИСПРАВЛЕНО (см. bdd/README.md §5.3, находка №2 — две записи были
-// математически неверны, пересчитано вручную):
-//  - "Проекция" (K=2, f(x0,x1)=x0, x1 фиктивна): sat=2 (assignments с x0=1),
-//    ci[x0]=2 (все sat-присвоения имеют x0=1), ci[x1]=1 (из них ровно одно
-//    имеет x1=1) -> вектор Чоу (2,1), не (2,0), как было. Плюс отдельная,
-//    не отмеченная в README ошибка: с весами (1,0) правильный порог — 1
-//    (sum=x0>=1 <=> x0=1), а не 2 (sum>=2 никогда не выполняется при x0 in
-//    {0,1} — старая запись была константой 0, а не проекцией).
-//  - "AND2 с фиктивной переменной" (K=3, f=x0 AND x1, x2 фиктивна): sat=2,
-//    ci[x0]=ci[x1]=2, ci[x2]=1 -> вектор Чоу (2,2,1), не (2,2,0). Веса (1,1,0)
-//    и порог 2 уже были верны — ошибка была только в ключе (sorted_canon),
-//    из-за чего реальная AND2-с-фиктивной-переменной функция никогда не
-//    находилась бы в базе (не false positive — verify_threshold_from_tt всё
-//    равно защищал от него — а false negative: NeedFallback вместо Threshold).
-inline constexpr std::array<DbEntry, 8> CHOW_DATABASE = {{
-    // K=1
-    { pack_key(1, 0, std::array<int, 6>{0, 0, 0, 0, 0, 0}), {{0, 0, 0, 0, 0, 0}}, 1, 1 }, // Константа 0
-    { pack_key(1, 1, std::array<int, 6>{1, 0, 0, 0, 0, 0}), {{1, 0, 0, 0, 0, 0}}, 1, 1 }, // x0
-
-    // K=2
-    { pack_key(2, 1, std::array<int, 6>{1, 1, 0, 0, 0, 0}), {{1, 1, 0, 0, 0, 0}}, 2, 2 }, // AND2
-    { pack_key(2, 2, std::array<int, 6>{2, 1, 0, 0, 0, 0}), {{1, 0, 0, 0, 0, 0}}, 1, 1 }, // Проекция (одна переменная фиктивна)
-    { pack_key(2, 3, std::array<int, 6>{2, 2, 0, 0, 0, 0}), {{1, 1, 0, 0, 0, 0}}, 1, 1 }, // OR2
-
-    // K=3
-    { pack_key(3, 2, std::array<int, 6>{2, 2, 1, 0, 0, 0}), {{1, 1, 0, 0, 0, 0}}, 2, 3 }, // AND2 с фиктивной переменной
-    { pack_key(3, 4, std::array<int, 6>{3, 3, 3, 0, 0, 0}), {{1, 1, 1, 0, 0, 0}}, 2, 3 }, // MAJ3
-    { pack_key(3, 7, std::array<int, 6>{4, 4, 4, 0, 0, 0}), {{1, 1, 1, 0, 0, 0}}, 1, 3 }  // OR3
-}};
+// Содержимое CHOW_DATABASE НИЖЕ сгенерировано программно, не вручную —
+// см. verify/diag_chow_database_gen.cpp и bdd/README.md §5.4а за полной
+// методологией генерации и её кросс-проверки. Не редактируйте вручную:
+// перегенерируйте через diag_chow_database_gen и вставьте результат целиком.
+#include "chow_database_generated.inc"
 
 static_assert([] {
     for (size_t i = 1; i < CHOW_DATABASE.size(); ++i) {
@@ -200,8 +97,6 @@ static_assert([] {
     }
     return true;
 }(), "CHOW_DATABASE must be sorted by key for std::lower_bound to work");
-
-constexpr bool IS_FULL_DATABASE = false; // Переключить на true при подключении полной БД (2730 записей)
 
 template <int K>
 FastThresholdResult<K> identify_threshold_fast(
@@ -241,7 +136,19 @@ FastThresholdResult<K> identify_threshold_fast(
         [](const DbEntry& entry, ChowKey k) { return entry.key < k; });
 
     if (it == CHOW_DATABASE.end() || it->key != key) {
-        return FastThresholdResult<K>{{}, 0, IS_FULL_DATABASE ? ThresholdStatus::NotThreshold : ThresholdStatus::NeedFallback};
+        // ИСПРАВЛЕНО (было: один общий IS_FULL_DATABASE для всех K сразу):
+        // полнота проверена генератором ОТДЕЛЬНО по каждому K (см.
+        // chow_database_generated.inc, bdd/README.md §5.4а) — для K<=5
+        // полнота доказана перебором ВСЕХ функций этой арности со сверкой
+        // против независимого ILP-оракула tt_to_thr на каждом расхождении;
+        // для K=6 (Dedekind(6)=7828354 монотонных функций — полный перебор
+        // с ILP-оракулом на каждой непрактичен в разумное время) база
+        // только эмпирически стабильна при росте границы весов, полнота НЕ
+        // доказана. Не найдено в базе при K<=5 -> действительно не
+        // пороговая. Не найдено при K=6 -> честно "не знаем", а не ложное
+        // "точно не пороговая".
+        return FastThresholdResult<K>{{}, 0,
+            IS_FULL_DATABASE_FOR_K[K] ? ThresholdStatus::NotThreshold : ThresholdStatus::NeedFallback};
     }
 
     FastThresholdResult<K> result;
