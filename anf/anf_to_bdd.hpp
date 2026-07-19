@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/anf_repr.hpp"
+#include "core/bdd_order_heuristics.hpp"
 
 namespace bmm {
 
@@ -36,13 +37,13 @@ namespace bmm {
 // для сравнительных бенчмарков (anf/bench_bdd_heuristics.cpp) и на будущее,
 // если понадобится сравнение вне бенчмарка. Внешний production-код должен
 // использовать anf_to_bdd(anf).
-enum class VariableOrderHeuristic {
-    MinIndex,       // возрастающий индекс переменной (без учёта структуры полинома)
-    LengthFreqRank,  // по (макс. длине монома переменной, затем частоте) — см. compute_rank_by_length_freq
-    Degree,          // по степени в графе взаимодействия переменных — см. compute_rank_by_degree
-    Force,           // алгоритм FORCE (Aloul et al.) — см. compute_rank_force
-};
-
+//
+// VariableOrderHeuristic — общий для anf_to_bdd и aig_to_bdd тип (см.
+// core/bdd_order_heuristics.hpp): MinIndex/Degree/Force не знают о мономах,
+// только о графе взаимодействия переменных, который каждый производитель
+// строит по своим данным (anf_to_bdd.cpp — по мономам, aig_to_bdd.cpp — по
+// фанинам AND-гейтов). LengthFreqRank — исключение, ANF-специфична
+// (использует понятие "длина монома"), её расчёт остался в anf_to_bdd.cpp.
 Result<Bdd> anf_to_bdd_with_heuristic(const Anf& anf, VariableOrderHeuristic heuristic);
 
 // Тесты: test_anf.cpp, секция "anf_to_bdd".

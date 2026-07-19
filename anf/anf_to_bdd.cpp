@@ -4,6 +4,8 @@
 
 #if BMM_HAVE_BRIAL
 
+#include "core/bdd_order_heuristics.hpp"
+
 #include <algorithm>
 #include <cstdint>
 #include <unordered_map>
@@ -189,7 +191,11 @@ Poly split_with(const Poly& poly, uint32_t var)
 // симметричных/случайных функциях (AND/OR/XOR-of-all, равномерно
 // случайные) — наоборот, ~1.9x МЕДЛЕННЕЕ (лишний проход подсчёта рангов не
 // окупается, когда все переменные и так равнозначны).
-using VariableRank = std::vector<uint32_t>;  // rank[var] -> приоритет, меньше = разложить раньше
+//
+// VariableRank теперь определён в core/bdd_order_heuristics.hpp (общий с
+// aig_to_bdd.cpp) — здесь остаётся только то, что специфично для ANF
+// (LengthFreqRank использует понятие "длина монома", и сам граф строится по
+// мономам, а не по фанинам AND-гейтов, как в aig_to_bdd.cpp).
 
 VariableRank compute_rank_by_length_freq(const Poly& poly, uint32_t n_vars)
 {
@@ -240,45 +246,19 @@ VariableRank compute_rank_by_length_freq(const Poly& poly, uint32_t n_vars)
     return rank;
 }
 
-// Тривиальный ранг для VariableOrderHeuristic::MinIndex — identity, т.е.
-// физический уровень совпадает с индексом переменной (натуральный порядок,
-// текущее поведение всех остальных производителей Bdd). choose_variable_by_rank
-// поверх identity_rank ведёт себя ТОЧНО как исторический
-// choose_variable_min_index (см. выше) — этой эвристике не нужна отдельная
-// функция выбора переменной, только отдельный rank-массив.
-VariableRank identity_rank(uint32_t n_vars)
-{
-    VariableRank rank(n_vars);
-    for (uint32_t i = 0; i < n_vars; ++i)
-    {
-        rank[i] = i;
-    }
-    return rank;
-}
-
-
-// ---------------------------------------------------------------------------
-// Граф взаимодействия переменных (узлы — переменные, ребро u-v — переменные
-// встретились в одном мономе, вес — число мономов, где встретились вместе).
-// Хранится как список смежности (hash map на переменную), не как плотная
-// матрица n x n — при n в десятки/сотни переменных и разреженных мономах
-// (типичный ANF) это не только дешевле по памяти, но и по времени: обход
-// idx2poly.size()^2 плотной матрицы был бы дороже, чем реальное число рёбер.
-// Стоимость построения — O(sum L_i^2) по всем мономам длины L_i (C(L,2) пар
-// на моном) — дёшево относительно самой постройки BDD при типичных для
-// проекта n<=24-36 и десятках-сотнях мономов (см. "Когда реально включать
-// параллелизм" в handoff-prompt-anf-bdd-heuristics.md — здесь параллелить не
-// стали умышленно, см. итоговую сводку у convert()/select_rank ниже).
-// ---------------------------------------------------------------------------
-struct InteractionGraph
-{
-    std::vector<std::unordered_map<uint32_t, uint32_t>> adjacency;  // adjacency[v][u] = вес ребра v-u
-};
-
+// identity_rank/InteractionGraph/compute_rank_by_degree/compute_rank_force
+// (алгоритмическая часть) теперь в core/bdd_order_heuristics.hpp — общие с
+// aig_to_bdd.cpp. Здесь остаётся только построение графа взаимодействия ИЗ
+// МОНОМОВ (ANF-специфично; aig_to_bdd.cpp строит тот же тип графа из
+// фанинов AND-гейтов) и две тонкие обёртки, чтобы не менять сигнатуры
+// (poly, n_vars) в вызывающем коде (select_rank ниже).
+//
+// Стоимость построения графа — O(sum L_i^2) по всем мономам длины L_i
+// (C(L,2) пар на моном) — дёшево относительно самой постройки BDD при
+// типичных для проекта n<=24-36 и десятках-сотнях мономов.
 InteractionGraph build_interaction_graph(const Poly& poly, uint32_t n_vars)
 {
-    InteractionGraph graph;
-    graph.adjacency.resize(n_vars);
+    InteractionGraph graph(n_vars);
 
     std::vector<uint32_t> mono_vars;
 
@@ -295,8 +275,7 @@ InteractionGraph build_interaction_graph(const Poly& poly, uint32_t n_vars)
         {
             for (size_t j = i + 1; j < mono_vars.size(); ++j)
             {
-                ++graph.adjacency[mono_vars[i]][mono_vars[j]];
-                ++graph.adjacency[mono_vars[j]][mono_vars[i]];
+                graph.add_edge(mono_vars[i], mono_vars[j]);
             }
         }
     }
@@ -307,125 +286,22 @@ InteractionGraph build_interaction_graph(const Poly& poly, uint32_t n_vars)
 // Эвристика A — степень вершины (VariableOrderHeuristic::Degree): чем больше
 // РАЗЛИЧНЫХ переменных встречается вместе с v хотя бы в одном мономе, тем
 // раньше её стоит разложить — она сильнее всего "запутана" с остальными.
-// Отличие от freq в compute_rank_by_length_freq: freq считает суммарное
-// число со-вхождений (повторные пересечения с одной и той же переменной
-// увеличивают freq, но не степень) — степень считает только количество
-// РАЗЛИЧНЫХ соседей, т.е. насколько широко переменная разбросана по графу, а
-// не насколько часто она встречается с одними и теми же партнёрами.
-// O(n log n) поверх уже построенного графа (сортировка n переменных).
+// Алгоритм — bmm::compute_rank_by_degree (core/bdd_order_heuristics.hpp),
+// здесь только построение графа по мономам.
 VariableRank compute_rank_by_degree(const Poly& poly, uint32_t n_vars)
 {
     InteractionGraph graph = build_interaction_graph(poly, n_vars);
-
-    std::vector<uint32_t> order(n_vars);
-    for (uint32_t i = 0; i < n_vars; ++i)
-    {
-        order[i] = i;
-    }
-
-    std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
-        const size_t deg_a = graph.adjacency[a].size();
-        const size_t deg_b = graph.adjacency[b].size();
-        if (deg_a != deg_b)
-        {
-            return deg_a > deg_b;
-        }
-        return a < b;  // детерминированный tie-break
-    });
-
-    VariableRank rank(n_vars);
-    for (uint32_t r = 0; r < n_vars; ++r)
-    {
-        rank[order[r]] = r;
-    }
-
-    return rank;
+    return ::bmm::compute_rank_by_degree(graph, n_vars);
 }
 
-// Эвристика B — FORCE (Aloul, Markov, Sakallah, "FORCE: A Fast and Easy-To-
-// Implement Variable-Ordering Heuristic", GLSVLSI 2003) — стандартный
-// алгоритм именно для упорядочивания переменных BDD/схем по гиперграфу
-// "сетей" (в оригинале — логические вентили/клозы; здесь роль сети играет
-// моном). Классическая формулировка усредняет позиции по НЕТАМ (центр
-// тяжести сети = среднее позиций всех переменных сети, затем новая позиция
-// переменной = среднее центров тяжести её сетей). Здесь используется
-// эквивалентная по духу, но более дешёвая формулировка поверх уже
-// построенного графа взаимодействия (как и предписано в задании — не
-// пересобирать сетевую структуру заново): "центр тяжести" переменной v — это
-// взвешенное среднее позиций всех её соседей в графе, вес ребра = число
-// монoмов, где встретились v и сосед вместе (тот же вклад, который дал бы
-// проход по нетам при мономах длины <= 3; при более длинных мономах это не
-// побитово то же самое, что классический net-based FORCE, но сохраняет его
-// ключевое свойство — переменные, которые появляются вместе часто и с
-// многими партнёрами, притягиваются друг к другу).
-//
-// Начальная позиция — исходный индекс переменной (произвольный, но
-// детерминированный старт). После N итераций сортируем по финальной позиции.
-// Изолированные переменные (нет рёбер, т.е. не входят ни в один немономиальный
-// терм) не двигаются — не с кем усредняться.
-//
-// Сложность: O(итерации * суммарное число рёбер графа) — при графе,
-// построенном за O(sum L_i^2), это дёшево (см. общую оценку у convert()).
+// Эвристика B — FORCE (Aloul, Markov, Sakallah, GLSVLSI 2003). Алгоритм —
+// bmm::compute_rank_force (core/bdd_order_heuristics.hpp), здесь только
+// построение графа по мономам (вес ребра = число мономов, где встретились
+// v и сосед вместе).
 VariableRank compute_rank_force(const Poly& poly, uint32_t n_vars, uint32_t iterations = 20)
 {
     InteractionGraph graph = build_interaction_graph(poly, n_vars);
-
-    std::vector<double> pos(n_vars);
-    for (uint32_t i = 0; i < n_vars; ++i)
-    {
-        pos[i] = static_cast<double>(i);
-    }
-
-    std::vector<double> next_pos(n_vars);
-
-    for (uint32_t iter = 0; iter < iterations; ++iter)
-    {
-        for (uint32_t v = 0; v < n_vars; ++v)
-        {
-            const auto& neighbors = graph.adjacency[v];
-
-            if (neighbors.empty())
-            {
-                next_pos[v] = pos[v];
-                continue;
-            }
-
-            double weighted_sum = 0.0;
-            uint64_t weight_total = 0;
-
-            for (const auto& [u, weight] : neighbors)
-            {
-                weighted_sum += pos[u] * static_cast<double>(weight);
-                weight_total += weight;
-            }
-
-            next_pos[v] = weighted_sum / static_cast<double>(weight_total);
-        }
-
-        pos.swap(next_pos);
-    }
-
-    std::vector<uint32_t> order(n_vars);
-    for (uint32_t i = 0; i < n_vars; ++i)
-    {
-        order[i] = i;
-    }
-
-    std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
-        if (pos[a] != pos[b])
-        {
-            return pos[a] < pos[b];
-        }
-        return a < b;  // детерминированный tie-break
-    });
-
-    VariableRank rank(n_vars);
-    for (uint32_t r = 0; r < n_vars; ++r)
-    {
-        rank[order[r]] = r;
-    }
-
-    return rank;
+    return ::bmm::compute_rank_force(graph, n_vars, iterations);
 }
 
 

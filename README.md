@@ -83,10 +83,30 @@ cmake --build build --target status
 этих размерах" тоже валидный результат. **Не редактируйте `STATUS.md`
 руками** — он перезаписывается при каждом запуске.
 
-CI (`.github/workflows/ci.yml`) делает то же самое на каждый push/PR;
-SKIP не валит сборку, FAIL — валит. Exhaustive-проверки в CI идут до n=16
-включительно (`verify::kMaxGroundTruthVars`) — для большего n используйте
-`benchmarks/`, это не задача обязательного прогона на каждый PR.
+**`.github/workflows/ci.yml` в репозитории пока нет** (см. `core/
+CONVENTIONS.md` п.8 за причиной и тем, что нужно, чтобы он появился) — текст
+ниже описывает, как CI ДОЛЖЕН вести себя, когда/если он будет настроен, не
+то, что реально запускается на каждый push/PR сейчас. Пока что делайте то
+же самое вручную: `cmake --build build --target status` локально/в
+devcontainer. Exhaustive-проверки идут до `verify::kMaxGroundTruthVars`
+включительно (сверяйте актуальное значение в `verify/ground_truth/
+ground_truth.hpp` — не полагайтесь на конкретное число здесь) — для
+большего n используйте `benchmarks/`/`verify/real_datasets_tests.cpp`, это
+не задача обязательного прогона на каждый PR. SKIP не должен валить сборку,
+FAIL — должен.
+
+Дополнительно к `test_aig`/`test_bdd`/`test_anf`/`test_thr` — `test_chains`
+(round-trip и циклы между всеми парами представлений) и `test_real_datasets`
+(EPFL-схемы, AES S-box/χ/бент-функция, Коллегия выборщиков США) — оба уже
+зарегистрированы в `ctest` (см. `verify/chain_tests.cpp`,
+`verify/real_datasets_tests.cpp`; результаты — `verify/CHAIN_TESTS_REPORT.md`
+и `verify/REAL_DATASETS_REPORT.md`, перегенерируются при каждом запуске).
+
+`aig_to_bdd` (как и `anf_to_bdd`) теперь строит BDD с FORCE-эвристикой
+порядка переменных (`core/bdd_order_heuristics.hpp`, `aig_to_bdd_with_heuristic`
+в `aig/aig_to_bdd.hpp`) — защита от структурного взрыва BDD на реальных
+схемах с «неудачным» графом взаимодействия переменных, эмпирически
+подтверждена на EPFL `router.aig` (n=60, см. `SESSION_REPORT.md` §8).
 
 ## 5. Контракт и конвенции
 

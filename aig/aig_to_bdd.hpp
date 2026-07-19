@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/bdd_order_heuristics.hpp"
 #include "core/common.hpp"
 
 namespace bmm {
@@ -26,7 +27,27 @@ namespace bmm {
 // Lace-потока (обычно это делает `RUN(...)`/`sylvan::Bdd` уже сам по себе
 // внутри активного Sylvan-контекста, инициализированного в main()).
 //
-// Тесты: test_aig.cpp, секция "aig_to_bdd".
+// Порядок переменных: как и anf_to_bdd (см. anf/anf_to_bdd.hpp), физический
+// уровень Sylvan для узла фиксирован ИНДЕКСОМ переменной — единственный
+// способ получить действительно другой (не натуральный) порядок в итоговом
+// BDD — строить узлы с bddVar(rank[var]) и вернуть Bdd с явным var_to_level.
+// aig_to_bdd(aig) без переупорядочивания (натуральный PI-порядок) не имеет
+// защиты от экспоненциального взрыва на входах с "неудачной" структурой
+// графа взаимодействия переменных — тот же класс риска, что задокументирован
+// для anf_to_bdd в anf/README.md §5.2, подтверждён эмпирически и для
+// aig_to_bdd на реальной схеме (EPFL router, n=60, см. SESSION_REPORT.md).
+// aig_to_bdd_with_heuristic(aig, Force) строит граф взаимодействия
+// переменных по фанин-структуре AIG (см. aig_to_bdd.cpp) и применяет тот же
+// проверенный алгоритм FORCE, что anf_to_bdd — используйте её вместо
+// aig_to_bdd(aig), если по входу заранее известно или подозревается, что
+// натуральный (по индексу PI) порядок может быть неудачным.
+Result<Bdd> aig_to_bdd_with_heuristic(const Aig& aig, VariableOrderHeuristic heuristic);
+
+// Тесты: test_aig.cpp, секция "aig_to_bdd". Натуральный PI-порядок (эквивалент
+// aig_to_bdd_with_heuristic(aig, VariableOrderHeuristic::MinIndex)) — не
+// переставляет уровни, самый дешёвый путь там, где переупорядочивание не
+// нужно (или наоборот, входы уже настолько малы/структурированы, что это не
+// имеет значения).
 Result<Bdd> aig_to_bdd(const Aig& aig);
 
 }  // namespace bmm
