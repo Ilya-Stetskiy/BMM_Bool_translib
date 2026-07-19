@@ -87,24 +87,53 @@ Result<Aig> thr_to_aig(const Thr& thr) {
         int B = max_sum > 0 ? (64 - __builtin_clzll(max_sum)) : 1;
 
         std::mutex ntk_mutex;
-        
+
+        // ИСПРАВЛЕНО (найдено benchmarks/large_scale_bench.cpp — thr_to_aig
+        // на реальных случайных весах стабильно в 2.6-3.6 раза МЕДЛЕННЕЕ
+        // однопоточной версии на всех n от 50 до 2000, не только на малых):
+        // раньше safe_and брал net_mutex НА КАЖДЫЙ отдельный create_and, а
+        // full_adder ниже собирает sum/cout из 9 таких вызовов (через
+        // safe_xor->safe_or->safe_and) — то есть 9 отдельных захватов
+        // мьютекса на один полный сумматор, при n·B таких сумматоров это
+        // сотни тысяч циклов lock/unlock на ОДНОМ общем мьютексе. safe_not
+        // не трогает разделяемую сеть (create_not — просто переворачивает
+        // complement-бит уже существующего сигнала, ничего не создаёт),
+        // поэтому не защищается мьютексом и раньше, и сейчас — это не
+        // источник накладных расходов.
+        //
+        // raw_*-хелперы НЕ берут мьютекс сами — предполагается, что
+        // вызывающий код (full_adder ниже) уже держит ОДИН lock_guard на
+        // ВСЮ последовательность создания гейтов одного сумматора, вместо
+        // девяти отдельных. Использовать raw_* напрямую вне такой секции
+        // небезопасно.
         auto safe_not = [&](Signal a) {
             return ntk.create_not(a);
         };
-        
+
+        auto raw_and = [&](Signal a, Signal b) {
+            return ntk.create_and(a, b);
+        };
+
+        auto raw_or = [&](Signal a, Signal b) {
+            return safe_not(raw_and(safe_not(a), safe_not(b)));
+        };
+
+        auto raw_xor = [&](Signal a, Signal b) {
+            Signal term1 = raw_and(a, safe_not(b));
+            Signal term2 = raw_and(safe_not(a), b);
+            return raw_or(term1, term2);
+        };
+
+        // safe_and/safe_or — оставлены для мест ВНЕ full_adder (компаратор
+        // ниже, п.4), где вызовы одиночные и накладные расходы одного
+        // lock/unlock несущественны относительно остального.
         auto safe_and = [&](Signal a, Signal b) {
             std::lock_guard<std::mutex> lock(ntk_mutex);
             return ntk.create_and(a, b);
         };
-        
+
         auto safe_or = [&](Signal a, Signal b) {
             return safe_not(safe_and(safe_not(a), safe_not(b)));
-        };
-        
-        auto safe_xor = [&](Signal a, Signal b) {
-            Signal term1 = safe_and(a, safe_not(b));
-            Signal term2 = safe_and(safe_not(a), b);
-            return safe_or(term1, term2);
         };
 
         using FAMemoMap = tbb::concurrent_hash_map<FA_Input, std::pair<Signal, Signal>, FA_Hash>;
@@ -137,13 +166,22 @@ Result<Aig> thr_to_aig(const Thr& thr) {
 
             FAMemoMap::accessor acc;
             if (fa_memo.insert(acc, key)) {
-                Signal s1 = safe_xor(a, b);
-                Signal sum = safe_xor(s1, cin);
-                
-                Signal c1 = safe_and(a, b);
-                Signal c2 = safe_and(cin, s1);
-                Signal cout = safe_or(c1, c2);
-                
+                // ОДИН lock_guard на весь сумматор (было 9 отдельных внутри
+                // safe_xor/safe_and/safe_or) — см. комментарий у raw_and
+                // выше. memo-аксессор tbb::concurrent_hash_map уже держит
+                // свою (мелкогранулярную, по бакету) блокировку на время
+                // этого if — вложенный сюда ntk_mutex не меняет порядок
+                // захвата относительно старого кода (там ntk_mutex тоже
+                // захватывался изнутри уже открытого memo-аксессора, просто
+                // девять раз подряд вместо одного).
+                std::lock_guard<std::mutex> lock(ntk_mutex);
+                Signal s1 = raw_xor(a, b);
+                Signal sum = raw_xor(s1, cin);
+
+                Signal c1 = raw_and(a, b);
+                Signal c2 = raw_and(cin, s1);
+                Signal cout = raw_or(c1, c2);
+
                 acc->second = {sum, cout};
             }
             return acc->second;
@@ -172,18 +210,37 @@ Result<Aig> thr_to_aig(const Thr& thr) {
             }
         }
 
+        // ИСПРАВЛЕНО: раньше tbb::task_group спавнился на КАЖДОМ внутреннем
+        // узле дерева (n-1 узлов на n листьев — до ~2n запусков задач
+        // всего), вплоть до объединения двух ОДИНОЧНЫХ листьев. Полезная
+        // работа на одном узле — сложение двух B-битных чисел (B~10-20 в
+        // типичных размерах) — горстка гейтов; overhead на спавн TBB-задачи
+        // (планирование, атомарные операции очереди) для такой крохотной
+        // работы гарантированно перевешивает пользу, особенно раз вся
+        // защищённая работа всё равно сериализована через ntk_mutex внутри
+        // full_adder (см. выше) — параллельные потоки просто дерутся за
+        // один и тот же лок вместо честной параллельной работы. Порог ниже
+        // — задачи спавнятся только для достаточно крупных поддеревьев,
+        // мелкие объединяются последовательно без единого TBB-вызова.
+        constexpr int kMinParallelChunk = 64;
+
         // 3. Рекурсивное построение дерева сумматоров через TBB
         std::function<std::vector<Signal>(int, int)> build_tree = [&](int l, int r) -> std::vector<Signal> {
             if (l == r) return bitvecs[l];
-            
+
             int mid = l + (r - l) / 2;
             std::vector<Signal> left_sum, right_sum;
-            
-            tbb::task_group tg;
-            tg.run([&]() { left_sum = build_tree(l, mid); });
-            tg.run([&]() { right_sum = build_tree(mid + 1, r); });
-            tg.wait();
-            
+
+            if (r - l + 1 >= kMinParallelChunk) {
+                tbb::task_group tg;
+                tg.run([&]() { left_sum = build_tree(l, mid); });
+                tg.run([&]() { right_sum = build_tree(mid + 1, r); });
+                tg.wait();
+            } else {
+                left_sum = build_tree(l, mid);
+                right_sum = build_tree(mid + 1, r);
+            }
+
             return add_bitvectors(left_sum, right_sum);
         };
 

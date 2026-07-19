@@ -67,14 +67,26 @@ Result<Aig> tt_to_aig(const TruthTable& tt) {
         return net.get_constant(value);
     };
 
-    auto create_and_safe = [&](mockturtle::aig_network::signal a, mockturtle::aig_network::signal b) {
+    // ИСПРАВЛЕНО (найдено benchmarks/large_scale_bench.cpp на СЛУЧАЙНОЙ, не
+    // majority-подобной truth table — там мемоизация по (tt, var_idx) почти
+    // не даёт коллизий, и рекурсия реально исследует близко к 2^n узлов;
+    // раньше на каждый ТАКОЙ узел было 3 ОТДЕЛЬНЫХ захвата net_mutex
+    // (create_and x2 + create_or) — при миллионах узлов и параллельных
+    // TBB-задачах (var_idx>=12) это means миллионы лишних кругов
+    // lock/unlock под contention, где сама полезная работа под каждым
+    // логом тривиальна (один хэш-lookup в mockturtle). Три отдельных
+    // критических секции объединены в одну — то же количество полезной
+    // работы, втрое меньше захватов мьютекса на узел. Не устраняет сам
+    // экспоненциальный рост числа узлов на неструктурированном входе (это
+    // неизбежно для точного синтеза AIG по произвольной truth table — см.
+    // SESSION_REPORT.md), только накладные расходы синхронизации сверх
+    // него.
+    auto build_mux_safe = [&](mockturtle::aig_network::signal sel, mockturtle::aig_network::signal hi,
+                               mockturtle::aig_network::signal lo) {
         std::lock_guard<std::mutex> lock(net_mutex);
-        return net.create_and(a, b);
-    };
-
-    auto create_or_safe = [&](mockturtle::aig_network::signal a, mockturtle::aig_network::signal b) {
-        std::lock_guard<std::mutex> lock(net_mutex);
-        return net.create_or(a, b);
+        auto term_hi = net.create_and(sel, hi);
+        auto term_lo = net.create_and(!sel, lo);
+        return net.create_or(term_hi, term_lo);
     };
 
     std::function<mockturtle::aig_network::signal(const kitty::dynamic_truth_table&, uint32_t)> build_aig_rec =
@@ -158,9 +170,7 @@ Result<Aig> tt_to_aig(const TruthTable& tt) {
         }
 
         auto s = pi_signals[split_var];
-        auto term_hi = create_and_safe(s, hi_signal);
-        auto term_lo = create_and_safe(!s, lo_signal);
-        auto result_signal = create_or_safe(term_hi, term_lo);
+        auto result_signal = build_mux_safe(s, hi_signal, lo_signal);
 
         {
             // Короткая критическая секция БЕЗ рекурсии внутри — только

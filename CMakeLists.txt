@@ -315,6 +315,15 @@ target_link_libraries(bench_real_corpus PRIVATE bmm_anf bmm_core)
 add_executable(bench_real_corpus_thr thr/bench_real_corpus.cpp)
 target_link_libraries(bench_real_corpus_thr PRIVATE bmm_thr bmm_core)
 
+# ПОСТОЯННЫЙ таргет — сравнительная таблица однопоточно/параллельно для
+# всех 12 TBB/OpenMP-функций без ограничения kMaxGroundTruthVars=12 (см.
+# benchmarks/large_scale_bench.cpp). Намеренно НЕ зарегистрирован в ctest —
+# по решению с пользователем: отдельный опциональный запуск, не удлиняет
+# обычный прогон ctest (сейчас ~12-13 минут и так, см. TEST_TIMING_REPORT.md).
+add_executable(large_scale_bench benchmarks/large_scale_bench.cpp)
+target_link_libraries(large_scale_bench PRIVATE bmm_aig bmm_anf bmm_thr bmm_core
+                                                 TBB::tbb OpenMP::OpenMP_CXX ortools::ortools)
+
 include(CTest)
 include(Catch)
 catch_discover_tests(test_aig)
