@@ -6,44 +6,44 @@
 
 | Функция | Механизм | n | Однопоточно, мс | Параллельно, мс | Ускорение | Корректность |
 |---|---|---|---|---|---|---|
-| aig_to_anf | TBB | 50 | 0.080551 | 0.081844 | 0.984202x | PASS |
-| aig_to_anf | TBB | 100 | 0.265041 | 0.25085 | 1.05657x | PASS |
-| aig_to_anf | TBB | 200 | 0.45358 | 0.428932 | 1.05746x | PASS |
-| aig_to_anf | TBB | 500 | 1.78789 | 1.72061 | 1.0391x | PASS |
-| aig_to_anf | TBB | 1000 | 3.36292 | 3.23341 | 1.04005x | PASS |
-| aig_to_anf | TBB | 2000 | 6.88689 | 8.70449 | 0.791189x | PASS |
-| aig_to_thr | TBB | 12 | 290.004 | 151.696 | 1.91174x | PASS |
-| aig_to_thr | TBB | 16 | SKIP (aig_to_thr: функция не является пороговой) -- дальше не растим | | | |
-| tt_to_aig | TBB | 12 | 0.962677 | 1.31544 | 0.731831x | PASS |
-| tt_to_aig | TBB | 16 | 116.211 | 25.0667 | 4.63608x | PASS |
-| tt_to_aig | TBB | 20 | SKIP (пробный вызов уже 1130491.803153мс > бюджета) -- дальше не растим | | | |
-| anf_to_aig | seq | 50 | 0.133344 | 0.098967 | 1.34736x | PASS |
-| anf_to_aig | seq | 100 | 0.179216 | 0.169998 | 1.05422x | PASS |
-| anf_to_aig | seq | 200 | 0.438188 | 0.46643 | 0.939451x | PASS |
-| anf_to_aig | seq | 500 | 1.02768 | 1.06866 | 0.961652x | PASS |
-| anf_to_aig | seq | 1000 | 3.34843 | 3.00087 | 1.11582x | PASS |
-| anf_to_aig | seq | 2000 | 5.68125 | 9.90143 | 0.573781x | PASS |
-| anf_to_thr | seq | 12 | SKIP (anf_to_thr: not a threshold function) -- дальше не растим | | | |
-| tt_to_anf | OpenMP | 16 | 126.668 | 87.7579 | 1.44338x | PASS |
-| tt_to_anf | OpenMP | 20 | 3211.34 | 3430.18 | 0.936199x | PASS |
-| tt_to_anf | OpenMP | 22 | SKIP (пробный вызов уже 41222.374353мс > бюджета) -- дальше не растим | | | |
-| aig_to_tt | OpenMP | 12 | 0.005686 | 0.005678 | 1.00141x | PASS |
-| aig_to_tt | OpenMP | 16 | 0.104843 | 0.109695 | 0.955768x | PASS |
-| aig_to_tt | OpenMP | 20 | 2.64005 | 2.8747 | 0.918376x | PASS |
-| aig_to_tt | OpenMP | 24 | 49.2046 | 50.4602 | 0.975117x | PASS |
-| anf_to_tt | OpenMP | 12 | 0.063834 | 0.063539 | 1.00464x | PASS |
-| anf_to_tt | OpenMP | 16 | 1.18676 | 1.19453 | 0.993495x | PASS |
-| anf_to_tt | OpenMP | 20 | 23.2754 | 6.95477 | 3.34668x | PASS |
-| anf_to_tt | OpenMP | 24 | 457.415 | 278.517 | 1.64233x | PASS |
-| tt_to_thr | OpenMP | 12 | SKIP (The given truth table is not a threshold function) -- дальше не растим | | | |
-| thr_to_anf | OpenMP | 50 | SKIP (thr_to_anf: n > 24 exceeds flat array memory limits) -- дальше не растим | | | |
-| thr_to_tt | OpenMP | 12 | 0.174974 | 0.17477 | 1.00117x | PASS |
-| thr_to_tt | OpenMP | 16 | 2.86238 | 2.78837 | 1.02654x | PASS |
-| thr_to_tt | OpenMP | 20 | 50.3748 | 36.4632 | 1.38152x | PASS |
-| thr_to_tt | OpenMP | 24 | 1021.43 | 249.091 | 4.10065x | PASS |
-| thr_to_aig | TBB | 50 | 0.122597 | 0.108828 | 1.12652x | PASS |
-| thr_to_aig | TBB | 100 | 0.215045 | 0.206875 | 1.03949x | PASS |
-| thr_to_aig | TBB | 200 | 0.436412 | 0.439471 | 0.993039x | PASS |
-| thr_to_aig | TBB | 500 | 1.32311 | 1.35335 | 0.977657x | PASS |
-| thr_to_aig | TBB | 1000 | 3.31254 | 3.3994 | 0.97445x | PASS |
-| thr_to_aig | TBB | 2000 | 8.52628 | 8.07106 | 1.0564x | PASS |
+| aig_to_anf | TBB | 50 | 0.072356 | 0.072239 | 1.00162x | PASS |
+| aig_to_anf | TBB | 100 | 0.211654 | 0.195764 | 1.08117x | PASS |
+| aig_to_anf | TBB | 200 | 0.490997 | 0.469762 | 1.0452x | PASS |
+| aig_to_anf | TBB | 500 | 1.7447 | 1.69348 | 1.03024x | PASS |
+| aig_to_anf | TBB | 1000 | 3.11703 | 3.04769 | 1.02275x | PASS |
+| aig_to_anf | TBB | 2000 | 6.18522 | 6.19432 | 0.998531x | PASS |
+| aig_to_thr | TBB | 12 | 225.049 | 157.599 | 1.42798x | PASS |
+| aig_to_thr | TBB | 16 | SKIP (aig_to_thr: функция не является пороговой, пробный вызов 8538.835462мс) -- дальше не растим | | | |
+| tt_to_aig | TBB | 12 | 1.03371 | 1.06566 | 0.970015x | PASS |
+| tt_to_aig | TBB | 16 | 125.819 | 26.8701 | 4.6825x | PASS |
+| tt_to_aig | TBB | 20 | SKIP (пробный вызов уже 97618.130063мс > бюджета) -- дальше не растим | | | |
+| anf_to_aig | seq | 50 | 0.119669 | 0.094572 | 1.26537x | PASS |
+| anf_to_aig | seq | 100 | 0.157085 | 0.184061 | 0.85344x | PASS |
+| anf_to_aig | seq | 200 | 0.540719 | 0.53217 | 1.01606x | PASS |
+| anf_to_aig | seq | 500 | 0.86856 | 0.851707 | 1.01979x | PASS |
+| anf_to_aig | seq | 1000 | 3.28351 | 2.66336 | 1.23284x | PASS |
+| anf_to_aig | seq | 2000 | 6.53634 | 15.0631 | 0.433931x | PASS |
+| anf_to_thr | seq | 12 | SKIP (anf_to_thr: not a threshold function, пробный вызов 109.542254мс) -- дальше не растим | | | |
+| tt_to_anf | OpenMP | 16 | 151.268 | 132.156 | 1.14461x | PASS |
+| tt_to_anf | OpenMP | 20 | 2637.78 | 2602.48 | 1.01356x | PASS |
+| tt_to_anf | OpenMP | 22 | SKIP (пробный вызов уже 45698.554184мс > бюджета) -- дальше не растим | | | |
+| aig_to_tt | OpenMP | 12 | 0.005526 | 0.005466 | 1.01098x | PASS |
+| aig_to_tt | OpenMP | 16 | 0.099492 | 0.099506 | 0.999859x | PASS |
+| aig_to_tt | OpenMP | 20 | 2.27076 | 2.22497 | 1.02058x | PASS |
+| aig_to_tt | OpenMP | 24 | 44.6409 | 45.7386 | 0.976x | PASS |
+| anf_to_tt | OpenMP | 12 | 0.069057 | 0.065419 | 1.05561x | PASS |
+| anf_to_tt | OpenMP | 16 | 1.26614 | 1.29892 | 0.974767x | PASS |
+| anf_to_tt | OpenMP | 20 | 26.9393 | 209.918 | 0.128332x | PASS |
+| anf_to_tt | OpenMP | 24 | 477.933 | 290.044 | 1.64779x | PASS |
+| tt_to_thr | OpenMP | 12 | SKIP (tt_to_thr: функция не унитонна хотя бы по одной переменной — необходимое условие пороговости не выполнено, ILP не запускается, пробный вызов 47.065092мс) -- дальше не растим | | | |
+| thr_to_anf | OpenMP | 50 | SKIP (thr_to_anf: n > 24 exceeds flat array memory limits, пробный вызов 0.001458мс) -- дальше не растим | | | |
+| thr_to_tt | OpenMP | 12 | 0.203795 | 0.201451 | 1.01164x | PASS |
+| thr_to_tt | OpenMP | 16 | 4.32476 | 4.23039 | 1.02231x | PASS |
+| thr_to_tt | OpenMP | 20 | 70.2892 | 36.0385 | 1.95039x | PASS |
+| thr_to_tt | OpenMP | 24 | 1149.67 | 279.163 | 4.11827x | PASS |
+| thr_to_aig | TBB | 50 | 0.132889 | 0.131925 | 1.00731x | PASS |
+| thr_to_aig | TBB | 100 | 0.289349 | 0.371933 | 0.77796x | PASS |
+| thr_to_aig | TBB | 200 | 0.567392 | 0.567334 | 1.0001x | PASS |
+| thr_to_aig | TBB | 500 | 1.82489 | 1.7529 | 1.04107x | PASS |
+| thr_to_aig | TBB | 1000 | 4.70624 | 4.62139 | 1.01836x | PASS |
+| thr_to_aig | TBB | 2000 | 8.67659 | 8.53992 | 1.016x | PASS |

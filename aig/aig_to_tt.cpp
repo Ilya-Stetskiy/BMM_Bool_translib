@@ -3,6 +3,7 @@
 #include <tracy/Tracy.hpp>
 #include <vector>
 #include <array>
+#include <algorithm>
 #include <omp.h>
 
 namespace bmm {
@@ -20,91 +21,121 @@ Result<TruthTable> aig_to_tt(const Aig& aig) {
 
     TruthTable tt(n);
 
-    // ИСПРАВЛЕНО (найдено benchmarks/large_scale_bench.cpp: параллельная
-    // версия при n=12..24 стабильно давала speedup~1.00x, то есть НИКАКОГО
-    // выигрыша от OpenMP несмотря на честно независимые по данным блоки).
-    // Причина — не гонки/локи (их тут нет вовсе), а фиксированная цена
-    // ОДНОГО вызова mockturtle::simulate(): внутри он аллоцирует
-    // node_map (make_shared<vector<SimulationType>>(net.size())) и, что
-    // важнее, ОТДЕЛЬНЫЙ vector<SimulationType> fanin_values НА КАЖДЫЙ гейт
-    // сети (см. algorithms/simulation.hpp) — то есть на каждый блок
-    // приходится ~net.size() мелких куч-аллокаций через один и тот же
-    // glibc-аллокатор. При n=24 и блоке в 6 "свободных" переменных
-    // num_blocks=2^18=262144, а полезная работа на блок — единицы AND/XOR
-    // над 64-битным словом (наносекунды) — итог: время съедается malloc/free
-    // и fork-join OpenMP, а не вычислениями, отсюда и отсутствие ускорения.
+    // ИСПРАВЛЕНО дважды на одну и ту же находку (benchmarks/large_scale_bench.cpp:
+    // параллельная версия при n=12..24 стабильно давала speedup~1.00x —
+    // независимые по данным блоки, но НИКАКОГО выигрыша от OpenMP). Корень:
+    // не гонки/локи (их тут нет вовсе), а фиксированная цена ОДНОГО вызова
+    // mockturtle::simulate() — внутри он аллоцирует node_map
+    // (make_shared<vector<SimulationType>>(net.size())) и ОТДЕЛЬНЫЙ
+    // vector<SimulationType> fanin_values НА КАЖДЫЙ гейт сети на каждый
+    // вызов (см. algorithms/simulation.hpp) — при num_blocks=2^18 (n=24) это
+    // сотни тысяч мелких куч-аллокаций, съедающих всё время при том, что
+    // полезная работа на блок — единицы AND/XOR над 64-битным словом.
     //
-    // Фикс — увеличить ширину блока (число "свободных" переменных на один
-    // вызов simulate) с 6 до kBlockVars=10: тот же общий объём полезной
-    // работы (то же суммарное число гейт-операций по всей truth table), но
-    // в 2^(10-6)=16 раз МЕНЬШЕ вызовов simulate(), а значит в 16 раз меньше
-    // аллокаций node_map/fanin_values на весь запуск. kitty::static_truth_table
-    // для NumVars>6 хранит std::array<uint64_t, NumBlocks> с обычными
-    // begin()/end() (проверено в kitty/static_truth_table.hpp) — копируем
-    // все NumBlocks слов блока разом через std::copy вместо ручного побитового
-    // разбора одного uint64_t, как было раньше.
-    constexpr uint32_t kBlockVars = 10;
+    // Первая попытка фикса (в истории git) расширяла блок с 6 до 10
+    // "свободных" переменных — в 16 раз меньше вызовов simulate(), а значит
+    // меньше аллокаций, но не ноль. Найдено на независимой студенческой
+    // ветке origin/aig (student2, коммит 2db40e7 "changes in aig_to_anf and
+    // aig_to_tt without parallel") — идея адаптирована и проверена заново
+    // (сам код скопирован не был; в том же коммите были отдельные, не
+    // относящиеся сюда изменения aig_to_anf, которые сюда не переносим):
+    // устранить аллокации НАПРЯМУЮ, а не реже их платить. Сеть разворачивается
+    // в плоский массив гейтов ОДИН РАЗ до параллельного участка (topological
+    // order уже гарантирован: mockturtle::aig_network хранит инвариант
+    // "индекс фаниина всегда меньше индекса узла", foreach_gate обходит в
+    // порядке индекса — см. также комментарий в bdd_to_tt.cpp про тот же
+    // инвариант). Внутри `#pragma omp parallel` каждый поток заводит СВОЙ
+    // буфер значений узлов (node_vals) ОДИН РАЗ ДО цикла по блокам — ноль
+    // аллокаций в горячем цикле вместо просто "меньше". Раз аллокации
+    // перестали быть узким местом, ширина блока возвращена к естественной
+    // (одно 64-битное слово truth table) — мельче и лучше сбалансированные
+    // между потоками единицы работы, без платы аллокациями за это.
+    struct FlatGate {
+        uint32_t dest;
+        uint32_t src0;
+        bool inv0;
+        uint32_t src1;
+        bool inv1;
+    };
 
-    if (n < kBlockVars) {
-        struct custom_block_simulator {
-            custom_block_simulator() = default;
-            kitty::static_truth_table<kBlockVars> compute_constant(bool value) const {
-                kitty::static_truth_table<kBlockVars> t;
-                return value ? ~t : t;
-            }
-            kitty::static_truth_table<kBlockVars> compute_pi(uint32_t index) const {
-                kitty::static_truth_table<kBlockVars> t;
-                if (index < kBlockVars) {
-                    kitty::create_nth_var(t, index);
-                }
-                return t;
-            }
-            kitty::static_truth_table<kBlockVars> compute_not(kitty::static_truth_table<kBlockVars> const& value) const {
-                return ~value;
-            }
-        };
+    std::vector<FlatGate> gates;
+    gates.reserve(net.num_gates());
+    net.foreach_gate([&](auto node) {
+        uint32_t dest = net.node_to_index(node);
+        std::array<mockturtle::aig_network::signal, 2> fanins{};
+        uint32_t k = 0;
+        net.foreach_fanin(node, [&](auto signal) { fanins[k++] = signal; });
+        gates.push_back({
+            dest,
+            static_cast<uint32_t>(net.node_to_index(net.get_node(fanins[0]))),
+            net.is_complemented(fanins[0]),
+            static_cast<uint32_t>(net.node_to_index(net.get_node(fanins[1]))),
+            net.is_complemented(fanins[1])
+        });
+    });
 
-        custom_block_simulator sim;
-        auto po_values = mockturtle::simulate<kitty::static_truth_table<kBlockVars>>(net, sim);
-        for (uint64_t i = 0; i < (1ULL << n); ++i) {
-            if (kitty::get_bit(po_values[0], i)) {
-                kitty::set_bit(tt.raw(), i);
-            }
+    mockturtle::aig_network::signal po_sig;
+    net.foreach_po([&](auto signal) { po_sig = signal; });
+    const uint32_t po_node = net.node_to_index(net.get_node(po_sig));
+    const bool po_inv = net.is_complemented(po_sig);
+
+    std::vector<uint32_t> pi_nodes(n);
+    uint32_t pi_counter = 0;
+    net.foreach_pi([&](auto node) {
+        pi_nodes[pi_counter++] = net.node_to_index(node);
+    });
+
+    const uint32_t net_size = net.size();
+    const uint32_t const_node = net.node_to_index(net.get_node(net.get_constant(false)));
+
+    const uint64_t num_blocks = (n < 6) ? 1ULL : (1ULL << (n - 6));
+    uint64_t* tt_data = &(*tt.raw().begin());
+
+    #pragma omp parallel
+    {
+        // Буфер на поток заводится ОДИН раз здесь (не внутри omp for) —
+        // переиспользуется для всех блоков, назначенных этому потоку, без
+        // единой дополнительной аллокации в цикле ниже.
+        std::vector<kitty::static_truth_table<6>> node_vals(net_size);
+        kitty::static_truth_table<6> zero_tt;
+        kitty::static_truth_table<6> one_tt = ~zero_tt;
+
+        std::array<kitty::static_truth_table<6>, 6> base_var_tts;
+        for (uint32_t i = 0; i < std::min(n, 6u); ++i) {
+            kitty::create_nth_var(base_var_tts[i], i);
         }
-    } else {
-        const uint64_t num_blocks = 1ULL << (n - kBlockVars);
-        constexpr uint64_t kWordsPerBlock = (1ULL << kBlockVars) / 64;
-        uint64_t* tt_data = &(*tt.raw().begin());
 
-        struct custom_block_simulator {
-            custom_block_simulator(uint64_t chunk_idx) : chunk_idx(chunk_idx) {}
-            kitty::static_truth_table<kBlockVars> compute_constant(bool value) const {
-                kitty::static_truth_table<kBlockVars> t;
-                return value ? ~t : t;
-            }
-            kitty::static_truth_table<kBlockVars> compute_pi(uint32_t index) const {
-                kitty::static_truth_table<kBlockVars> t;
-                if (index < kBlockVars) {
-                    kitty::create_nth_var(t, index);
-                } else {
-                    if ((chunk_idx >> (index - kBlockVars)) & 1ULL) {
-                        t = ~t;
-                    }
-                }
-                return t;
-            }
-            kitty::static_truth_table<kBlockVars> compute_not(kitty::static_truth_table<kBlockVars> const& value) const {
-                return ~value;
-            }
-            uint64_t chunk_idx;
-        };
-
-        #pragma omp parallel for schedule(static)
+        #pragma omp for schedule(static)
         for (int64_t w = 0; w < static_cast<int64_t>(num_blocks); ++w) {
-            custom_block_simulator sim(static_cast<uint64_t>(w));
-            auto po_values = mockturtle::simulate<kitty::static_truth_table<kBlockVars>>(net, sim);
-            std::copy(po_values[0].begin(), po_values[0].end(), tt_data + w * kWordsPerBlock);
+            node_vals[const_node] = zero_tt;
+
+            for (uint32_t i = 0; i < std::min(n, 6u); ++i) {
+                node_vals[pi_nodes[i]] = base_var_tts[i];
+            }
+
+            const uint64_t chunk_idx = static_cast<uint64_t>(w);
+            for (uint32_t i = 6; i < n; ++i) {
+                bool bit = (chunk_idx >> (i - 6)) & 1ULL;
+                node_vals[pi_nodes[i]] = bit ? one_tt : zero_tt;
+            }
+
+            for (const auto& gate : gates) {
+                auto val0 = gate.inv0 ? ~node_vals[gate.src0] : node_vals[gate.src0];
+                auto val1 = gate.inv1 ? ~node_vals[gate.src1] : node_vals[gate.src1];
+                node_vals[gate.dest] = val0 & val1;
+            }
+
+            auto res_tt = po_inv ? ~node_vals[po_node] : node_vals[po_node];
+            tt_data[w] = *res_tt.begin();
         }
+    }
+
+    if (n < 6) {
+        // Меньше 6 переменных -> результат уместился в младшие 2^n бит
+        // одного 64-битного слова, но вычислен как будто есть все 6
+        // "слотов" (те, что сверх n, никогда не читаются ни одним гейтом,
+        // поэтому не влияют на результат) — маскируем лишние повторы.
+        *tt_data &= (1ULL << (1ULL << n)) - 1ULL;
     }
 
     return ok<TruthTable>(std::move(tt));

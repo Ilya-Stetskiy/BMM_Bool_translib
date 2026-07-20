@@ -150,7 +150,8 @@ void sweep(const char* func_name, Mechanism mech, const std::vector<uint32_t>& s
 
         if (!is_ok(probe)) {
             SweepRow row{func_name, mech_name, n, 0, 0, 0, false,
-                         std::string("SKIP (") + error(probe).message + ") -- дальше не растим"};
+                         std::string("SKIP (") + error(probe).message + ", пробный вызов " +
+                             std::to_string(probe_ms) + "мс) -- дальше не растим"};
             print_row(row);
             g_rows.push_back(std::move(row));
             break;
