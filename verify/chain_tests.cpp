@@ -295,6 +295,19 @@ void run_indirect_vs_direct(Report& rep) {
         {Repr::Aig, Repr::Thr, {Repr::Bdd, Repr::Anf, Repr::Tt}, "maj", 13},
         {Repr::Aig, Repr::Bdd, {Repr::Anf, Repr::Tt}, "maj", 13},
         {Repr::Bdd, Repr::Aig, {Repr::Anf, Repr::Tt}, "maj", 13},
+        // По запросу пользователя ("можно ли обойти лимит через другое
+        // представление?") — bdd_to_thr работает НАПРЯМУЮ только для K<=6
+        // (CHOW_DATABASE, см. bdd/README.md §5.4а), K>6 -> NotImplemented.
+        // Bdd->Tt->Thr обходит эту границу: bdd_to_tt работает для любого
+        // n<=kMaxTruthTableVars=24, а tt_to_thr — общий ILP-путь (Muroga),
+        // не завязанный на маленькую справочную таблицу. n=7/9/11/13 —
+        // нечётные (только там "maj_nX" существует в growing_test_functions,
+        // majority определена только для нечётного n), все СТРОГО БОЛЬШЕ
+        // K<=6 — прямой путь ожидаемо недоступен на всех четырёх.
+        {Repr::Bdd, Repr::Thr, {Repr::Tt}, "maj", 7},
+        {Repr::Bdd, Repr::Thr, {Repr::Tt}, "maj", 9},
+        {Repr::Bdd, Repr::Thr, {Repr::Tt}, "maj", 11},
+        {Repr::Bdd, Repr::Thr, {Repr::Tt}, "maj", 13},
     };
 
     rep.line("| X | Y | n | прямой X->Y, мс | обход X->Z->Y (лучший), мс | Z | вывод |");

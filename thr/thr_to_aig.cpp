@@ -1,35 +1,37 @@
 #include "thr/thr_to_aig.hpp"
 
 #include <mockturtle/networks/aig.hpp>
-#include <tbb/task_group.h>
-#include <tbb/concurrent_hash_map.h>
 
 #include <vector>
-#include <mutex>
 #include <algorithm>
 #include <cstdint>
 #include <array>
 #include <functional>
+#include <unordered_map>
 
 namespace bmm {
 
 using Signal = mockturtle::aig_network::signal;
 
-// Прячем вспомогательные структуры в анонимный namespace, 
+// Прячем вспомогательные структуры в анонимный namespace,
 // чтобы они были видны только внутри этого .cpp файла
 namespace {
     struct FA_Input {
         uint32_t a, b, c;
+        bool operator==(const FA_Input& other) const {
+            return a == other.a && b == other.b && c == other.c;
+        }
     };
 
+    // ИСПРАВЛЕНО: раньше это был TBB-совместимый HashCompare (.hash()/.equal())
+    // для tbb::concurrent_hash_map — теперь просто std::hash-функтор
+    // (operator()) для std::unordered_map, см. большой комментарий у
+    // build_tree ниже про переход на полностью последовательную сборку.
     struct FA_Hash {
-        std::size_t hash(const FA_Input& i) const {
-            return std::hash<uint32_t>()(i.a) ^ 
-                  (std::hash<uint32_t>()(i.b) << 1) ^ 
+        std::size_t operator()(const FA_Input& i) const {
+            return std::hash<uint32_t>()(i.a) ^
+                  (std::hash<uint32_t>()(i.b) << 1) ^
                   (std::hash<uint32_t>()(i.c) << 2);
-        }
-        bool equal(const FA_Input& i1, const FA_Input& i2) const {
-            return i1.a == i2.a && i1.b == i2.b && i1.c == i2.c;
         }
     };
 } // namespace
@@ -86,57 +88,63 @@ Result<Aig> thr_to_aig(const Thr& thr) {
         // Разрядность для хранения сумм (B)
         int B = max_sum > 0 ? (64 - __builtin_clzll(max_sum)) : 1;
 
-        std::mutex ntk_mutex;
-
-        // ИСПРАВЛЕНО (найдено benchmarks/large_scale_bench.cpp — thr_to_aig
-        // на реальных случайных весах стабильно в 2.6-3.6 раза МЕДЛЕННЕЕ
-        // однопоточной версии на всех n от 50 до 2000, не только на малых):
-        // раньше safe_and брал net_mutex НА КАЖДЫЙ отдельный create_and, а
-        // full_adder ниже собирает sum/cout из 9 таких вызовов (через
-        // safe_xor->safe_or->safe_and) — то есть 9 отдельных захватов
-        // мьютекса на один полный сумматор, при n·B таких сумматоров это
-        // сотни тысяч циклов lock/unlock на ОДНОМ общем мьютексе. safe_not
-        // не трогает разделяемую сеть (create_not — просто переворачивает
-        // complement-бит уже существующего сигнала, ничего не создаёт),
-        // поэтому не защищается мьютексом и раньше, и сейчас — это не
-        // источник накладных расходов.
+        // ИСПРАВЛЕНО (см. thr/README.md §5 — большой раздел с честным
+        // замером и историей обеих итераций фикса): изначально дерево
+        // сумматоров строилось через TBB `tbb::task_group` (правило 2
+        // core/CONVENTIONS.md п.6 формально требует TBB здесь). Level 1
+        // (порог гранулярности `kMinParallelChunk` + консолидация 9 локов в
+        // 1 на сумматор) был реализован и подтверждён на числах, но при
+        // независимой ПОВТОРНОЙ проверке `benchmarks/large_scale_bench.cpp`
+        // честно показал: на n=50 (ниже порога, TBB-задачи вообще не
+        // спавнились) — паритет 1.01x, но начиная с n=100 (порог пройден,
+        // задачи реально спавнятся) — снова 3-5 раз МЕДЛЕННЕЕ (0.19x-0.30x),
+        // причём БЕЗ улучшения при росте n вплоть до n=2000. Level 2
+        // (шардинг на изолированные локальные сети + слияние) рассмотрен и
+        // отклонён отдельно — mockturtle не даёт быстрого примитива слияния
+        // сетей, любой перенос узлов стоит столько же, сколько исходное
+        // создание (`create_and`), то есть удвоил бы работу вместо
+        // распараллеливания её.
         //
-        // raw_*-хелперы НЕ берут мьютекс сами — предполагается, что
-        // вызывающий код (full_adder ниже) уже держит ОДИН lock_guard на
-        // ВСЮ последовательность создания гейтов одного сумматора, вместо
-        // девяти отдельных. Использовать raw_* напрямую вне такой секции
-        // небезопасно.
-        auto safe_not = [&](Signal a) {
+        // Корень проблемы — не гранулярность и не число локов, а сам факт,
+        // что `mockturtle::aig_network::create_and` не потокобезопасен и
+        // ТРЕБУЕТ единственного общего мьютекса на ВСЮ сеть: как только
+        // несколько поддеревьев реально исполняются параллельно, они
+        // сериализуются на этом одном мьютексе при каждом гейте — это
+        // contention, а не оверхед на сам lock/unlock, и он НЕ уменьшается
+        // с ростом n (наоборот, больше параллельных поддеревьев — больше
+        // конкуренции за тот же один мьютекс). Ни на одном протестированном
+        // размере (n=50..2000, три независимых прогона) не нашлось точки,
+        // где параллельный путь стабильно обгоняет последовательный.
+        //
+        // Решение: как и `aig_to_anf`/`anf_to_aig` (см. aig/README.md §1.3,
+        // anf/README.md §4 — тот же класс находки, BRiAl вместо
+        // mockturtle-мьютекса), `thr_to_aig` сознательно НЕ использует
+        // TBB — построение дерева сумматоров полностью последовательное.
+        // Это единственный способ ГАРАНТИРОВАННО не проигрывать
+        // последовательной версии, раз честного выигрыша от параллелизма
+        // при данной архитектуре mockturtle не существует ни при каком
+        // протестированном n. Как следствие, мьютекс и TBB concurrent
+        // hash map тоже не нужны — единственный поток, который когда-либо
+        // мутирует `ntk` или `fa_memo`, всегда один и тот же.
+        auto not_ = [&](Signal a) {
             return ntk.create_not(a);
         };
 
-        auto raw_and = [&](Signal a, Signal b) {
+        auto and_ = [&](Signal a, Signal b) {
             return ntk.create_and(a, b);
         };
 
-        auto raw_or = [&](Signal a, Signal b) {
-            return safe_not(raw_and(safe_not(a), safe_not(b)));
+        auto or_ = [&](Signal a, Signal b) {
+            return not_(and_(not_(a), not_(b)));
         };
 
-        auto raw_xor = [&](Signal a, Signal b) {
-            Signal term1 = raw_and(a, safe_not(b));
-            Signal term2 = raw_and(safe_not(a), b);
-            return raw_or(term1, term2);
+        auto xor_ = [&](Signal a, Signal b) {
+            Signal term1 = and_(a, not_(b));
+            Signal term2 = and_(not_(a), b);
+            return or_(term1, term2);
         };
 
-        // safe_and/safe_or — оставлены для мест ВНЕ full_adder (компаратор
-        // ниже, п.4), где вызовы одиночные и накладные расходы одного
-        // lock/unlock несущественны относительно остального.
-        auto safe_and = [&](Signal a, Signal b) {
-            std::lock_guard<std::mutex> lock(ntk_mutex);
-            return ntk.create_and(a, b);
-        };
-
-        auto safe_or = [&](Signal a, Signal b) {
-            return safe_not(safe_and(safe_not(a), safe_not(b)));
-        };
-
-        using FAMemoMap = tbb::concurrent_hash_map<FA_Input, std::pair<Signal, Signal>, FA_Hash>;
+        using FAMemoMap = std::unordered_map<FA_Input, std::pair<Signal, Signal>, FA_Hash>;
         FAMemoMap fa_memo;
 
         // Полный сумматор с мемоизацией.
@@ -164,27 +172,20 @@ Result<Aig> thr_to_aig(const Thr& thr) {
             std::sort(idxs.begin(), idxs.end());
             FA_Input key{idxs[0], idxs[1], idxs[2]};
 
-            FAMemoMap::accessor acc;
-            if (fa_memo.insert(acc, key)) {
-                // ОДИН lock_guard на весь сумматор (было 9 отдельных внутри
-                // safe_xor/safe_and/safe_or) — см. комментарий у raw_and
-                // выше. memo-аксессор tbb::concurrent_hash_map уже держит
-                // свою (мелкогранулярную, по бакету) блокировку на время
-                // этого if — вложенный сюда ntk_mutex не меняет порядок
-                // захвата относительно старого кода (там ntk_mutex тоже
-                // захватывался изнутри уже открытого memo-аксессора, просто
-                // девять раз подряд вместо одного).
-                std::lock_guard<std::mutex> lock(ntk_mutex);
-                Signal s1 = raw_xor(a, b);
-                Signal sum = raw_xor(s1, cin);
-
-                Signal c1 = raw_and(a, b);
-                Signal c2 = raw_and(cin, s1);
-                Signal cout = raw_or(c1, c2);
-
-                acc->second = {sum, cout};
+            auto it = fa_memo.find(key);
+            if (it != fa_memo.end()) {
+                return it->second;
             }
-            return acc->second;
+
+            Signal s1 = xor_(a, b);
+            Signal sum = xor_(s1, cin);
+
+            Signal c1 = and_(a, b);
+            Signal c2 = and_(cin, s1);
+            Signal cout = or_(c1, c2);
+
+            auto [inserted_it, _] = fa_memo.emplace(key, std::make_pair(sum, cout));
+            return inserted_it->second;
         };
 
         // Сложение двух векторов (шириной B)
@@ -210,36 +211,14 @@ Result<Aig> thr_to_aig(const Thr& thr) {
             }
         }
 
-        // ИСПРАВЛЕНО: раньше tbb::task_group спавнился на КАЖДОМ внутреннем
-        // узле дерева (n-1 узлов на n листьев — до ~2n запусков задач
-        // всего), вплоть до объединения двух ОДИНОЧНЫХ листьев. Полезная
-        // работа на одном узле — сложение двух B-битных чисел (B~10-20 в
-        // типичных размерах) — горстка гейтов; overhead на спавн TBB-задачи
-        // (планирование, атомарные операции очереди) для такой крохотной
-        // работы гарантированно перевешивает пользу, особенно раз вся
-        // защищённая работа всё равно сериализована через ntk_mutex внутри
-        // full_adder (см. выше) — параллельные потоки просто дерутся за
-        // один и тот же лок вместо честной параллельной работы. Порог ниже
-        // — задачи спавнятся только для достаточно крупных поддеревьев,
-        // мелкие объединяются последовательно без единого TBB-вызова.
-        constexpr int kMinParallelChunk = 64;
-
-        // 3. Рекурсивное построение дерева сумматоров через TBB
+        // 3. Рекурсивное построение дерева сумматоров — последовательно
+        // (см. большой комментарий выше про TBB/mockturtle-мьютекс).
         std::function<std::vector<Signal>(int, int)> build_tree = [&](int l, int r) -> std::vector<Signal> {
             if (l == r) return bitvecs[l];
 
             int mid = l + (r - l) / 2;
-            std::vector<Signal> left_sum, right_sum;
-
-            if (r - l + 1 >= kMinParallelChunk) {
-                tbb::task_group tg;
-                tg.run([&]() { left_sum = build_tree(l, mid); });
-                tg.run([&]() { right_sum = build_tree(mid + 1, r); });
-                tg.wait();
-            } else {
-                left_sum = build_tree(l, mid);
-                right_sum = build_tree(mid + 1, r);
-            }
+            std::vector<Signal> left_sum = build_tree(l, mid);
+            std::vector<Signal> right_sum = build_tree(mid + 1, r);
 
             return add_bitvectors(left_sum, right_sum);
         };
@@ -249,13 +228,13 @@ Result<Aig> thr_to_aig(const Thr& thr) {
         // 4. Компаратор: проверяем, что final_sum >= theta_adj
         uint64_t T = static_cast<uint64_t>(theta_adj);
         Signal ge = ntk.get_constant(true);
-        
+
         for (int i = 0; i < B; ++i) {
             bool t_bit = (T >> i) & 1;
             if (t_bit) {
-                ge = safe_and(final_sum[i], ge);
+                ge = and_(final_sum[i], ge);
             } else {
-                ge = safe_or(final_sum[i], ge);
+                ge = or_(final_sum[i], ge);
             }
         }
 
