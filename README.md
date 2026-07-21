@@ -207,6 +207,39 @@ Catch2/`verify`: [`quickstart_non_bdd.cpp`](examples/quickstart_non_bdd.cpp)
 почему это нужно только для `Bdd` и почему там именно такое значение
 `deque_size`, а не дефолт Lace).
 
+## 4б. Подключение из внешнего проекта: find_package
+
+Библиотеку больше не нужно копировать внутрь своего дерева. После
+`cmake --build build --target install` (или `cmake --install build --prefix
+<путь>`) доступен обычный CMake-пакет:
+
+```cmake
+find_package(bmm-translib REQUIRED)
+target_link_libraries(my_app PRIVATE bmm::bmm_aig bmm::bmm_core)
+```
+
+```cpp
+#include <bmm/core/common.hpp>
+#include <bmm/aig/tt_to_aig.hpp>
+```
+
+Экспортируются `bmm::bmm_core` (интерфейс контракта) и по одному таргету на
+представление — `bmm::bmm_aig`/`bmm::bmm_bdd`/`bmm::bmm_anf`/`bmm::bmm_thr`
+(линкуйте только нужные). Заголовки ставятся под `<prefix>/include/bmm/
+<модуль>/` — тот же префикс `bmm/`, что и в `namespace bmm`, используется
+одинаково и внутри репозитория, и снаружи.
+
+**Честная оговорка** (подробнее — `cmake/bmm-translibConfig.cmake.in`):
+Sylvan/BRiAl/mockturtle не имеют собственного CMake-пакета в этом окружении
+— их абсолютные пути "запечены" в экспортируемые таргеты как есть. Пакет
+воспроизводимо работает на машине с тем же layout зависимостей (тот же
+Docker-образ `genetica-boolean-lib` или его копия), но не является
+универсально релокейтабл-пакетом. TBB и Tracy устанавливаются вместе с
+bmm-translib (нужны при финальной линковке даже там, где сама библиотека
+линкует их `PRIVATE` — для статических библиотек это не освобождает
+потребителя от необходимости их предоставить); OpenMP/OR-Tools — реальные
+системные пакеты, потребитель находит их сам через свой `find_package`.
+
 ## 5. Контракт и конвенции
 
 Прежде чем писать тело функции — прочитайте
