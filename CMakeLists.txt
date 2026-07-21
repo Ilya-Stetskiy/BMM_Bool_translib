@@ -333,6 +333,21 @@ catch_discover_tests(test_thr)
 catch_discover_tests(test_core)
 
 # ---------------------------------------------------------------------------
+# examples/ — минимальные автономные примеры вызова библиотеки БЕЗ Catch2/
+# bmm_verify (см. examples/README.md). В отличие от test_<format>.cpp они не
+# используют verify::run_translation_tests<X,Y> — только сама функция
+# трансляции и её прямой Result<T>. Не зарегистрированы в ctest — это не
+# тесты корректности (та же функция уже проверена в test_bdd/test_aig), а
+# демонстрация вызова для внешнего потребителя библиотеки.
+# ---------------------------------------------------------------------------
+
+add_executable(example_quickstart_bdd examples/quickstart_bdd.cpp)
+target_link_libraries(example_quickstart_bdd PRIVATE bmm_bdd bmm_core)
+
+add_executable(example_quickstart_non_bdd examples/quickstart_non_bdd.cpp)
+target_link_libraries(example_quickstart_non_bdd PRIVATE bmm_aig bmm_core)
+
+# ---------------------------------------------------------------------------
 # test_chains — round-trip/циклы/прямой-vs-обходной путь между всеми пятью
 # представлениями (см. verify/chain_tests.cpp). ПОСТОЯННЫЙ таргет (не
 # удаляется), в отличие от bench_*/diag_*: дополняет тесты отдельных функций

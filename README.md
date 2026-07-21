@@ -192,6 +192,21 @@ FAIL — должен.
 схемах с «неудачным» графом взаимодействия переменных, эмпирически
 подтверждена на EPFL `router.aig` (n=60, см. `SESSION_REPORT.md` §8).
 
+## 4а. Быстрый старт: как позвать функцию из СВОЕГО кода
+
+`test_<format>.cpp` — не лучший образец для этого: они собраны вокруг общей
+тестовой инфраструктуры (`verify::run_translation_tests<X,Y>`, единый
+`main()` на всех — `verify/test_main.cpp`), а не показывают прямой вызов.
+
+[`examples/`](examples/README.md) — два минимальных автономных файла без
+Catch2/`verify`: [`quickstart_non_bdd.cpp`](examples/quickstart_non_bdd.cpp)
+(вызов `tt_to_aig` напрямую из `main()`) и
+[`quickstart_bdd.cpp`](examples/quickstart_bdd.cpp) (то же самое для
+`tt_to_bdd` — но с обязательной инициализацией Sylvan/Lace, без которой
+любая работа с `Bdd` падает в SIGSEGV; `examples/README.md` объясняет,
+почему это нужно только для `Bdd` и почему там именно такое значение
+`deque_size`, а не дефолт Lace).
+
 ## 5. Контракт и конвенции
 
 Прежде чем писать тело функции — прочитайте
