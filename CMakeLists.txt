@@ -427,6 +427,25 @@ add_test(NAME chain_tests COMMAND test_chains
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # ---------------------------------------------------------------------------
+# test_full_matrix — ПОЛНАЯ матрица всех пар (X,Y) и всех обходных Z (см.
+# verify/full_matrix_tests.cpp), в отличие от test_chains "Часть 3" (курируемый
+# список, только время) — здесь ВСЕ комбинации без исключения, и проверяется
+# совпадение РЕЗУЛЬТАТА с независимым эталоном, не факт, что путь выполнился.
+#
+# ЭТОТ ТЕСТ МОЖЕТ ПАДАТЬ ПРЯМО СЕЙЧАС — известная причина: bdd_to_thr
+# игнорирует Bdd::var_at_level() для входов с нестандартным порядком уровней
+# (таких как выход anf_to_bdd по умолчанию), см. doc-комментарий в самом
+# verify/full_matrix_tests.cpp. Это ожидаемо и НЕ повод удалять/подавлять
+# тест — задача исправить bdd_to_thr отдельная (не в этой правке).
+# ---------------------------------------------------------------------------
+
+add_executable(test_full_matrix verify/full_matrix_tests.cpp)
+target_link_libraries(test_full_matrix PRIVATE bmm_aig bmm_bdd bmm_anf bmm_thr bmm_verify bmm_core
+                                                TBB::tbb OpenMP::OpenMP_CXX ortools::ortools)
+add_test(NAME full_matrix_tests COMMAND test_full_matrix
+         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# ---------------------------------------------------------------------------
 # test_real_datasets — те же проверки (отдельные функции + round-trip), но
 # на РЕАЛЬНЫХ наборах данных (EPFL AIG-схемы, AES S-box/χ/бент-функция,
 # Коллегия выборщиков США), а не на синтетических growing_test_functions()
