@@ -339,9 +339,21 @@ Result<Thr> bdd_to_thr(const Bdd& bdd) {
             }
 
             // 6. Восстанавливаем глобальные веса размера n_vars
+            //
+            // ИСПРАВЛЕНО: unique_vars[i] — это ФИЗИЧЕСКИЙ УРОВЕНЬ Sylvan
+            // (curr.TopVar() выше), не логический индекс переменной — они
+            // совпадают только для Bdd с натуральным (identity) порядком.
+            // aig_to_bdd/anf_to_bdd по умолчанию строят Bdd с FORCE-порядком
+            // (см. Bdd::var_at_level в core/common.hpp и её обоснование) —
+            // для такого входа старая версия (global_weights[unique_vars[i]])
+            // молча писала вес не в ту позицию глобального вектора весов.
+            // Найдено verify/full_matrix_tests.cpp (Aig->Bdd->Thr,
+            // Anf->Bdd->Thr). var_at_level — identity, если bdd построен с
+            // натуральным порядком (tt_to_bdd, thr_to_bdd), так что для них
+            // поведение не меняется.
             std::vector<int64_t> global_weights(n_vars, 0);
             for (int i = 0; i < K; ++i) {
-                global_weights[unique_vars[i]] = final_weights[i];
+                global_weights[bdd.var_at_level(unique_vars[i])] = final_weights[i];
             }
 
             return ok(Thr(std::move(global_weights), final_threshold));
