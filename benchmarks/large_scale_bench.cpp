@@ -28,18 +28,18 @@
 // опциональный бинарь, как benchmarks/bench_real_corpus.cpp. Пишет
 // benchmarks/LARGE_SCALE_REPORT.md.
 
-#include "aig/aig_to_anf.hpp"
-#include "aig/aig_to_thr.hpp"
-#include "aig/aig_to_tt.hpp"
-#include "aig/tt_to_aig.hpp"
-#include "anf/anf_to_aig.hpp"
-#include "anf/anf_to_thr.hpp"
-#include "anf/anf_to_tt.hpp"
-#include "anf/tt_to_anf.hpp"
-#include "thr/thr_to_aig.hpp"
-#include "thr/thr_to_anf.hpp"
-#include "thr/thr_to_tt.hpp"
-#include "thr/tt_to_thr.hpp"
+#include <bmm/aig/aig_to_anf.hpp>
+#include <bmm/aig/aig_to_thr.hpp>
+#include <bmm/aig/aig_to_tt.hpp>
+#include <bmm/aig/tt_to_aig.hpp>
+#include <bmm/anf/anf_to_aig.hpp>
+#include <bmm/anf/anf_to_thr.hpp>
+#include <bmm/anf/anf_to_tt.hpp>
+#include <bmm/anf/tt_to_anf.hpp>
+#include <bmm/thr/thr_to_aig.hpp>
+#include <bmm/thr/thr_to_anf.hpp>
+#include <bmm/thr/thr_to_tt.hpp>
+#include <bmm/thr/tt_to_thr.hpp>
 
 #include "benchmarks/large_scale_generators.hpp"
 #include "benchmarks/scaling.hpp"

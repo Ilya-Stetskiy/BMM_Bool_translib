@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.24)
-project(bmm-translib CXX)
+# Версия — только для генерации bmm-translibConfigVersion.cmake (см. install()
+# в конце файла); полноценное версионирование (тег/CHANGELOG) — отдельная,
+# ещё не сделанная задача.
+project(bmm-translib VERSION 0.1.0 LANGUAGES CXX)
 
 # ---------------------------------------------------------------------------
 # Общие настройки
@@ -180,13 +183,52 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(tracy)
 
 # ---------------------------------------------------------------------------
+# Публичный include-неймспейс bmm/ — core/common.hpp и все 20 функций
+# трансляции подключаются везде в дереве (и внутри самого репозитория, и
+# из внешнего проекта после `find_package`) как
+# `#include <bmm/core/common.hpp>`, `#include <bmm/aig/aig_to_bdd.hpp>` и
+# т.д. — совпадает с C++ `namespace bmm`, в котором и так лежит весь код.
+#
+# Физически core/, aig/, bdd/, anf/, thr/ остаются на прежних местах в
+# корне репозитория (не переносим — на них ссылаются CONVENTIONS.md,
+# READMEs каждой папки и весь студенческий workflow "открой aig/
+# aig_to_bdd.cpp"), поэтому для сборки ВНУТРИ дерева генерируем symlink-
+# прослойку в build/ (${BMM_INCLUDE_ROOT}/bmm/<module> -> <module>/) и
+# добавляем её в include-пути bmm_core. Для УСТАНОВЛЕННОГО дерева ниже есть
+# отдельный `install(DIRECTORY ...)` на реальные .hpp (см. секцию install()
+# в конце файла) — та же логика, но не symlink, а физическая копия
+# заголовков под <prefix>/include/bmm/.
+# ---------------------------------------------------------------------------
+
+set(BMM_INCLUDE_ROOT "${CMAKE_BINARY_DIR}/_bmm_include")
+file(MAKE_DIRECTORY "${BMM_INCLUDE_ROOT}/bmm")
+foreach(_bmm_module core aig bdd anf thr)
+    if(NOT EXISTS "${BMM_INCLUDE_ROOT}/bmm/${_bmm_module}")
+        file(CREATE_LINK "${CMAKE_CURRENT_SOURCE_DIR}/${_bmm_module}"
+                          "${BMM_INCLUDE_ROOT}/bmm/${_bmm_module}"
+                          SYMBOLIC)
+    endif()
+endforeach()
+
+# ---------------------------------------------------------------------------
 # bmm_core — INTERFACE: core/common.hpp header-only, но собирает все
 # include-пути и линковки внешних зависимостей в одном месте.
 # ---------------------------------------------------------------------------
 
 add_library(bmm_core INTERFACE)
+# CMAKE_CURRENT_SOURCE_DIR/BMM_INCLUDE_ROOT обёрнуты в $<BUILD_INTERFACE:...>
+# — оба пути лежат внутри дерева этого проекта (source/build), и
+# install(EXPORT ...) ниже ОБЯЗАН это требование соблюсти (иначе ошибка
+# конфигурации "contains path ... which is prefixed in the build/source
+# directory"): для установленного потребителя эти пути не существуют, вместо
+# них подставляется $<INSTALL_INTERFACE:...> из INCLUDES DESTINATION у
+# install(TARGETS ...). MOCKTURTLE_ROOT (/opt/mockturtle) в эту проверку не
+# попадает — это абсолютный путь ВНЕ дерева проекта (тот же компромисс,
+# что описан в cmake/bmm-translibConfig.cmake.in: работает на машине с тем
+# же layout зависимостей, не полностью релокейтабл).
 target_include_directories(bmm_core INTERFACE
-    "${CMAKE_CURRENT_SOURCE_DIR}"
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<BUILD_INTERFACE:${BMM_INCLUDE_ROOT}>
     "${MOCKTURTLE_ROOT}/include"
     ${MOCKTURTLE_LIB_INCLUDES}
 )
@@ -439,6 +481,68 @@ if(CUDD_INCLUDE_DIR AND CUDD_LIBRARY)
 else()
     message(STATUS "CUDD (libcudd) не найден — diag_dddmp_probe/мост DDDMP->Sylvan недоступны")
 endif()
+
+# ---------------------------------------------------------------------------
+# install()/export() — find_package(bmm-translib) со стороны внешнего
+# проекта. Раньше подключить библиотеку можно было, только скопировав
+# исходники внутрь своего дерева и вручную повторив список файлов/линковок
+# из этого CMakeLists.txt — теперь это `find_package(bmm-translib REQUIRED)`
+# + `target_link_libraries(... bmm::bmm_aig ...)`, как для любой обычной
+# CMake-библиотеки.
+#
+# ЧЕСТНАЯ ОГОВОРКА (см. cmake/bmm-translibConfig.cmake.in за подробностями):
+# Sylvan/BRiAl/mockturtle не поставляют собственный CMake-пакет в этом
+# окружении — bmm_core подключает их через find_path/find_library с
+# абсолютными путями (см. начало файла), и эти абсолютные пути "запекаются"
+# в экспортируемые таргеты как есть. Это значит: экспорт воспроизводимо
+# работает на машине С ТЕМ ЖЕ layout зависимостей (тот же Docker-образ
+# genetica-boolean-lib или его копия), но не является полностью
+# релокейтабл-пакетом в общем смысле CMake — осознанный компромисс для
+# проекта с одним общим учебным Docker-образом на весь курс, не недосмотр.
+# ---------------------------------------------------------------------------
+
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+install(TARGETS bmm_core bmm_aig bmm_bdd bmm_anf bmm_thr
+    EXPORT bmm-translibTargets
+    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+    INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+)
+
+# Только .hpp (не .cpp/test_*.cpp/README.md/*.inc) — под
+# <prefix>/include/bmm/<module>, тот же путь, что и symlink-прослойка
+# bmm/<module> для сборки внутри дерева (см. выше, до add_library(bmm_core)).
+foreach(_bmm_module core aig bdd anf thr)
+    install(DIRECTORY "${_bmm_module}/"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/bmm/${_bmm_module}"
+        FILES_MATCHING PATTERN "*.hpp"
+    )
+endforeach()
+
+install(EXPORT bmm-translibTargets
+    FILE bmm-translibTargets.cmake
+    NAMESPACE bmm::
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/bmm-translib"
+)
+
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/bmm-translibConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/bmm-translibConfig.cmake"
+    INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/bmm-translib"
+)
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/bmm-translibConfigVersion.cmake"
+    VERSION "${PROJECT_VERSION}"
+    COMPATIBILITY SameMajorVersion
+)
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/bmm-translibConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/bmm-translibConfigVersion.cmake"
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/bmm-translib"
+)
 
 # ---------------------------------------------------------------------------
 # status — прогоняет все 4 тестовых бинаря + bmm_config_dump, генерирует

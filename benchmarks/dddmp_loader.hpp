@@ -60,7 +60,7 @@
 
 #pragma once
 
-#include "core/common.hpp"
+#include <bmm/core/common.hpp>
 
 #include <cstdio>
 #include <cstdlib>

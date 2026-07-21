@@ -1,4 +1,4 @@
-#include "thr/thr_to_aig.hpp"
+#include <bmm/thr/thr_to_aig.hpp>
 
 #include <mockturtle/networks/aig.hpp>
 

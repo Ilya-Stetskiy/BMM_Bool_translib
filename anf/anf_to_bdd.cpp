@@ -4,7 +4,7 @@
 
 #if BMM_HAVE_BRIAL
 
-#include "core/bdd_order_heuristics.hpp"
+#include <bmm/core/bdd_order_heuristics.hpp>
 
 #include <algorithm>
 #include <cstdint>

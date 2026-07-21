@@ -29,11 +29,11 @@
 #include <vector>
 
 #include "benchmarks/openmp_scaling.hpp"
-#include "thr/thr_to_aig.hpp"
-#include "thr/thr_to_anf.hpp"
-#include "thr/thr_to_bdd.hpp"
-#include "thr/thr_to_tt.hpp"
-#include "thr/tt_to_thr.hpp"
+#include <bmm/thr/thr_to_aig.hpp>
+#include <bmm/thr/thr_to_anf.hpp>
+#include <bmm/thr/thr_to_bdd.hpp>
+#include <bmm/thr/thr_to_tt.hpp>
+#include <bmm/thr/tt_to_thr.hpp>
 #include "verify/reference_builders.hpp"
 #include "verify/test_runner.hpp"
 

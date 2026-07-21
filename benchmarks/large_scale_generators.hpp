@@ -25,8 +25,8 @@
 
 #pragma once
 
-#include "core/anf_repr.hpp"
-#include "core/common.hpp"
+#include <bmm/core/anf_repr.hpp>
+#include <bmm/core/common.hpp>
 
 #include <mockturtle/networks/aig.hpp>
 

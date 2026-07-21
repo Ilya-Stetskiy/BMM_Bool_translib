@@ -15,7 +15,7 @@
 // самого сравнения (обе стороны получены независимо: одна — трансляцией
 // внутри проекта, другая — готовым файлом от внешнего источника).
 
-#include "aig/aig_to_bdd.hpp"
+#include <bmm/aig/aig_to_bdd.hpp>
 #include "benchmarks/dddmp_loader.hpp"
 
 #include <lorina/aiger.hpp>

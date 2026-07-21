@@ -1,7 +1,7 @@
 #pragma once
 
-#include "core/bdd_order_heuristics.hpp"
-#include "core/common.hpp"
+#include <bmm/core/bdd_order_heuristics.hpp>
+#include <bmm/core/common.hpp>
 
 namespace bmm {
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/common.hpp"
+#include <bmm/core/common.hpp>
 
 namespace bmm {
 

@@ -16,8 +16,8 @@
 
 #include <cstdio>
 
-#include "aig/tt_to_aig.hpp"
-#include "core/common.hpp"
+#include <bmm/aig/tt_to_aig.hpp>
+#include <bmm/core/common.hpp>
 
 using namespace bmm;
 

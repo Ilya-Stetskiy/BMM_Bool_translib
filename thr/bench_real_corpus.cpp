@@ -36,12 +36,12 @@
 //     -w /workspace genetica-boolean-lib:latest bash -c \
 //     "cmake --build build --target bench_real_corpus_thr -j\$(nproc) && ./build/bench_real_corpus_thr"
 
-#include "thr/thr_to_aig.hpp"
-#include "thr/thr_to_anf.hpp"
-#include "thr/thr_to_bdd.hpp"
-#include "thr/thr_to_tt.hpp"
-#include "thr/tt_to_thr.hpp"
-#include "core/anf_repr.hpp"
+#include <bmm/thr/thr_to_aig.hpp>
+#include <bmm/thr/thr_to_anf.hpp>
+#include <bmm/thr/thr_to_bdd.hpp>
+#include <bmm/thr/thr_to_tt.hpp>
+#include <bmm/thr/tt_to_thr.hpp>
+#include <bmm/core/anf_repr.hpp>
 
 #include <sylvan_obj.hpp>
 

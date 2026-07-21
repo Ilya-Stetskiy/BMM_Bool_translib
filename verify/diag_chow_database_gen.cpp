@@ -35,9 +35,9 @@
 // оракул как ErrorCode::Unsupported, что и требуется для доказательства
 // отсутствия пропущенных записей.
 
-#include "core/common.hpp"
-#include "thr/tt_to_thr.hpp"
-#include "bdd/chow_detail.hpp"
+#include <bmm/core/common.hpp>
+#include <bmm/thr/tt_to_thr.hpp>
+#include <bmm/bdd/chow_detail.hpp>
 
 #include <array>
 #include <algorithm>

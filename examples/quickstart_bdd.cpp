@@ -11,8 +11,8 @@
 
 #include <sylvan_obj.hpp>
 
-#include "bdd/tt_to_bdd.hpp"
-#include "core/common.hpp"
+#include <bmm/bdd/tt_to_bdd.hpp>
+#include <bmm/core/common.hpp>
 
 using namespace bmm;
 
