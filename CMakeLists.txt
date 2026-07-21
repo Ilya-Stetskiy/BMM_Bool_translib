@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.28)  # EXCLUDE_FROM_ALL в FetchContent_Declare (см. ниже) требует 3.28+
 # Версия — только для генерации bmm-translibConfigVersion.cmake (см. install()
 # в конце файла); полноценное версионирование (тег/CHANGELOG) — отдельная,
 # ещё не сделанная задача.
@@ -127,6 +127,7 @@ if(NOT TBB_FOUND)
         GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
         GIT_TAG v2021.13.0
         GIT_SHALLOW TRUE
+        EXCLUDE_FROM_ALL  # иначе install() ниже заодно тащит TBB в install-дерево bmm-translib
     )
     FetchContent_MakeAvailable(oneTBB)
 endif()
@@ -162,6 +163,7 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
     GIT_TAG v3.5.2  # если тег устарел на момент сборки — обновите на актуальный релиз Catch2
     GIT_SHALLOW TRUE
+    EXCLUDE_FROM_ALL  # иначе install() ниже заодно тащит Catch2 в install-дерево bmm-translib
 )
 FetchContent_MakeAvailable(Catch2)
 
@@ -179,6 +181,7 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/wolfpld/tracy.git
     GIT_TAG v0.11.1
     GIT_SHALLOW TRUE
+    EXCLUDE_FROM_ALL  # иначе install() ниже заодно тащит Tracy в install-дерево bmm-translib
 )
 FetchContent_MakeAvailable(tracy)
 
