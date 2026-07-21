@@ -352,10 +352,12 @@ Result<Thr> bdd_to_thr(const Bdd& bdd) {
         }
 
     } catch (const std::bad_alloc&) {
-        return fail<Thr>(ErrorCode::OutOfMemory, "bdd_to_thr: исчерпана память");
+        return out_of_memory<Thr>("bdd_to_thr");
     }
-    // Общий catch(std::exception) намеренно удален, чтобы внутренние ошибки
-    // (logic_error и т.д.) не маскировались под InvalidArgument, а проявлялись явно.
+    // Общий catch(std::exception) намеренно не добавлен — теперь это единое
+    // для всех 20 функций правило (CONVENTIONS.md п.2а), не решение конкретно
+    // этой функции: внутренние ошибки (logic_error и т.д.) не должны
+    // маскироваться под InvalidArgument, а обязаны проявляться явно.
 }
 
 } // namespace bmm

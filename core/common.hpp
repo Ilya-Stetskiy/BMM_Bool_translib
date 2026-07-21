@@ -15,6 +15,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #if defined(BMM_FORCE_VARIANT_FALLBACK)
@@ -141,6 +142,19 @@ Result<T> fail(ErrorCode code, std::string message = {}) {
     return Result<T>(std::in_place_type<Error>, Error{code, std::move(message)});
 }
 #endif
+
+// Единая точка построения Result<T> для единственного разрешённого исключения
+// из правила "никаких исключений, только Result<T>" (CONVENTIONS.md п.2а) —
+// catch(std::bad_alloc) на границе функции трансляции. Раньше каждая из 20
+// функций сама писала `return fail<T>(ErrorCode::OutOfMemory, "fn: ...")` —
+// использование этого хелпера в catch-блоке не убирает сам try/catch (он
+// остаётся в каждой функции, т.к. это единственное место, где известно,
+// какое именно T нужно вернуть), но фиксирует код ошибки и формат сообщения
+// в одном месте, а не в 20 независимых копиях.
+template <class T>
+Result<T> out_of_memory(std::string_view fn_name) {
+    return fail<T>(ErrorCode::OutOfMemory, std::string(fn_name) + ": исчерпана память");
+}
 
 // ---------------------------------------------------------------------------
 // 3. TruthTable — вспомогательное представление (n <= kMaxTruthTableVars)

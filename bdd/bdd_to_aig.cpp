@@ -178,9 +178,7 @@ Result<Aig> bdd_to_aig(const Bdd& f) {
         return ok(Aig(std::move(aig)));
 
     } catch (const std::bad_alloc&) {
-        return fail<Aig>(ErrorCode::OutOfMemory, "bdd_to_aig: исчерпана память");
-    } catch (const std::exception& e) {
-        return fail<Aig>(ErrorCode::InvalidArgument, std::string("bdd_to_aig error: ") + e.what());
+        return out_of_memory<Aig>("bdd_to_aig");
     }
 }
 

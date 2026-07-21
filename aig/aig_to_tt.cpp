@@ -19,6 +19,23 @@ Result<TruthTable> aig_to_tt(const Aig& aig) {
         return fail<TruthTable>(ErrorCode::TooManyVariables, "aig_to_tt: слишком много переменных");
     }
 
+  // ДОБАВЛЕНО (унификация с остальными Aig-потребляющими функциями —
+  // aig_to_bdd/aig_to_anf/aig_to_thr уже ловят bad_alloc): `gates` ниже
+  // масштабируется размером входного Aig (net.num_gates()), а не n_vars() —
+  // kMaxTruthTableVars ограничивает только n, не размер входной схемы.
+  // ИЗВЕСТНОЕ ОГРАНИЧЕНИЕ: этот catch защищает только аллокации ДО
+  // `#pragma omp parallel` ниже (в частности `gates`). `node_vals` внутри
+  // omp-региона аллоцируется в каждом потоке независимо — bad_alloc там,
+  // не пойманный ВНУТРИ того же потока/региона, по спецификации OpenMP не
+  // гарантированно долетает до этого внешнего catch (в отличие от TBB,
+  // которая явно пробрасывает исключения задач наружу) — реалистичный
+  // необработанный крайний случай, если net_size окажется достаточно
+  // большим. Полная защита потребовала бы per-thread try/catch с
+  // передачей флага ошибки наружу через shared-переменную — не сделано в
+  // рамках этой правки (только унификация политики исключений, не
+  // отдельная задача про OpenMP-safety).
+  try {
+
     TruthTable tt(n);
 
     // ИСПРАВЛЕНО дважды на одну и ту же находку (benchmarks/large_scale_bench.cpp:
@@ -139,6 +156,10 @@ Result<TruthTable> aig_to_tt(const Aig& aig) {
     }
 
     return ok<TruthTable>(std::move(tt));
+
+  } catch (const std::bad_alloc&) {
+      return out_of_memory<TruthTable>("aig_to_tt");
+  }
 }
 
 }  // namespace bmm

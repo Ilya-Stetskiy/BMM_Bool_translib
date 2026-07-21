@@ -152,14 +152,7 @@ Result<TruthTable> bdd_to_tt(const Bdd& f)
 
     }
     catch (const std::bad_alloc&) {
-        return fail<TruthTable>(
-            ErrorCode::OutOfMemory,
-            "bdd_to_tt: исчерпана память");
-    }
-    catch(const std::exception& e) {
-        return fail<TruthTable>(
-            ErrorCode::InvalidArgument,
-            e.what());
+        return out_of_memory<TruthTable>("bdd_to_tt");
     }
 }
 

@@ -163,9 +163,7 @@ Result<Thr> aig_to_thr(const Aig& aig) {
     return fail<Thr>(ErrorCode::Unsupported, "aig_to_thr: функция не является пороговой");
 
   } catch (const std::bad_alloc&) {
-      return fail<Thr>(ErrorCode::OutOfMemory, "aig_to_thr: исчерпана память при построении ILP-модели");
-  } catch (const std::exception& e) {
-      return fail<Thr>(ErrorCode::InvalidArgument, std::string("aig_to_thr error: ") + e.what());
+      return out_of_memory<Thr>("aig_to_thr");
   }
 }
 

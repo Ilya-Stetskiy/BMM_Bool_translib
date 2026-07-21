@@ -134,9 +134,7 @@ Result<Anf> thr_to_anf(const Thr& thr) {
         return ok(Anf(std::move(p), n));
 #endif
     } catch (const std::bad_alloc&) {
-        return fail<Anf>(ErrorCode::OutOfMemory, "thr_to_anf: исчерпана память");
-    } catch (const std::exception& e) {
-        return fail<Anf>(ErrorCode::InvalidArgument, e.what());
+        return out_of_memory<Anf>("thr_to_anf");
     }
 }
 

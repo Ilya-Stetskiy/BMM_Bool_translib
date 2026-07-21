@@ -404,9 +404,7 @@ Result<Anf> bdd_to_anf(const Bdd& bdd) {
 #endif
 
     } catch (const std::bad_alloc&) {
-        return fail<Anf>(ErrorCode::OutOfMemory, "bdd_to_anf: исчерпана память");
-    } catch (const std::exception& e) {
-        return fail<Anf>(ErrorCode::InvalidArgument, std::string("bdd_to_anf error: ") + e.what());
+        return out_of_memory<Anf>("bdd_to_anf");
     }
 }
 

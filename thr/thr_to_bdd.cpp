@@ -67,7 +67,7 @@ Result<Bdd> thr_to_bdd(const Thr& thr) {
         return ok(Bdd(build_dp(build_dp, 0, thr.theta()), n));
 
     } catch (const std::bad_alloc&) {
-        return fail<Bdd>(ErrorCode::OutOfMemory, "thr_to_bdd: нехватка памяти при сборке графа");
+        return out_of_memory<Bdd>("thr_to_bdd");
     }
 }
 
