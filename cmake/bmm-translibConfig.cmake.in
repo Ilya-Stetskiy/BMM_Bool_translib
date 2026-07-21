@@ -14,12 +14,28 @@
 # layout зависимостей (тот же Docker-образ genetica-boolean-lib или его
 # копия), а не как полностью релокейтабл-пакет в общем смысле CMake.
 #
-# Threads — единственная транзитивная зависимость bmm_core, у которой
-# действительно есть собственный стандартный CMake-модуль, поэтому она
-# find_dependency, а не запечённый абсолютный путь.
+# Threads/TBB/OpenMP/ortools — реальные CMake-пакеты (стандартный модуль
+# либо собственный Config от поставщика), поэтому find_dependency, а не
+# запечённый абсолютный путь. bmm_aig/bmm_bdd/bmm_anf/bmm_thr линкуют их
+# как PRIVATE — но для СТАТИЧЕСКИХ библиотек это не освобождает потребителя
+# от необходимости предоставить их при финальной линковке своего
+# приложения (PRIVATE работает для include-путей/compile-definitions, не
+# для самого факта линковки статического архива) — отсюда find_dependency
+# здесь, а не молчаливое ожидание, что потребитель сам догадается. TBB и
+# OR-Tools нужно принести самостоятельно (системный пакет либо свой
+# FetchContent — см. README.md), это не бандлится вместе с bmm-translib.
+#
+# Tracy — исключение: он собирается через FetchContent БЕЗ EXCLUDE_FROM_ALL
+# (см. CMakeLists.txt) и устанавливается вместе с bmm-translib именно затем,
+# чтобы find_dependency(Tracy) ниже отработал без дополнительных действий
+# со стороны потребителя.
 
 include(CMakeFindDependencyMacro)
 find_dependency(Threads REQUIRED)
+find_dependency(TBB REQUIRED)
+find_dependency(OpenMP REQUIRED)
+find_dependency(ortools CONFIG REQUIRED)
+find_dependency(Tracy CONFIG REQUIRED)
 
 include("${CMAKE_CURRENT_LIST_DIR}/bmm-translibTargets.cmake")
 

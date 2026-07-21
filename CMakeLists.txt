@@ -127,7 +127,13 @@ if(NOT TBB_FOUND)
         GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
         GIT_TAG v2021.13.0
         GIT_SHALLOW TRUE
-        EXCLUDE_FROM_ALL  # иначе install() ниже заодно тащит TBB в install-дерево bmm-translib
+        # БЕЗ EXCLUDE_FROM_ALL — та же причина, что и у tracy ниже: bmm_aig/
+        # bmm_anf/bmm_thr линкуют TBB::tbb как PRIVATE, но для статических
+        # библиотек потребитель всё равно обязан предоставить TBB при
+        # финальной линковке. В ЭТОМ конкретном окружении (единый Docker-
+        # образ на весь курс) системного TBB нет вовсе (см. find_package(TBB
+        # QUIET) выше) — значит и потребителю неоткуда его взять, кроме как
+        # через установленную вместе с bmm-translib копию. Ставим её.
     )
     FetchContent_MakeAvailable(oneTBB)
 endif()
@@ -163,7 +169,12 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
     GIT_TAG v3.5.2  # если тег устарел на момент сборки — обновите на актуальный релиз Catch2
     GIT_SHALLOW TRUE
-    EXCLUDE_FROM_ALL  # иначе install() ниже заодно тащит Catch2 в install-дерево bmm-translib
+    # В отличие от TBB/Tracy ниже — EXCLUDE_FROM_ALL оставлен: Catch2 нужен
+    # только для сборки/тестов ЭТОГО репозитория, ни один экспортируемый
+    # bmm_<format> не линкует его даже PRIVATE, внешнему потребителю библиотеки
+    # он не нужен вообще ни в каком виде — без EXCLUDE_FROM_ALL install()
+    # ниже заодно потащил бы его в install-дерево bmm-translib без причины.
+    EXCLUDE_FROM_ALL
 )
 FetchContent_MakeAvailable(Catch2)
 
@@ -181,7 +192,16 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/wolfpld/tracy.git
     GIT_TAG v0.11.1
     GIT_SHALLOW TRUE
-    EXCLUDE_FROM_ALL  # иначе install() ниже заодно тащит Tracy в install-дерево bmm-translib
+    # БЕЗ EXCLUDE_FROM_ALL, в отличие от Catch2 ниже: bmm_aig/bmm_bdd/
+    # bmm_anf/bmm_thr линкуют TracyClient как PRIVATE, но для СТАТИЧЕСКИХ
+    # библиотек это всё равно попадает в экспортируемый link-интерфейс
+    # (потребитель обязан предоставить Tracy::TracyClient при финальной
+    # линковке своего приложения, PRIVATE тут не спасает — работает только
+    # для include-путей/compile-definitions, не для самого факта линковки
+    # статического архива). У Tracy есть собственный релокейтабл
+    # TracyConfig.cmake — устанавливаем её вместе с bmm-translib (см.
+    # cmake/bmm-translibConfig.cmake.in: find_dependency(Tracy)),
+    # а не заставляем потребителя доставать её самостоятельно.
 )
 FetchContent_MakeAvailable(tracy)
 
