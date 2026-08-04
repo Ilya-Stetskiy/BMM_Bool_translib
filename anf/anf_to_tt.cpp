@@ -97,6 +97,12 @@ Result<TruthTable> anf_to_tt(const Anf& anf)
 
     const uint64_t rows = 1ULL << n;
 
+  // ДОБАВЛЕНО (kMaxTruthTableVars поднят с 24 до 32, core/common.hpp):
+  // values ниже — 1 БАЙТ на строку, не бит (см. комментарий у неё) — 16 МБ
+  // при n=24, но 4 ГБ при n=32. На старом лимите такая аллокация не могла
+  // реалистично провалиться, поэтому catch не было; на новом — может.
+  try {
+
     // uint8_t вместо uint64_t: сокращает потребление памяти в 8 раз
     // (для n=24: 128 МБ -> 16 МБ), что позволяет данным поместиться в
     // L3-кэш процессора.
@@ -148,6 +154,10 @@ Result<TruthTable> anf_to_tt(const Anf& anf)
     }
 
     return ok<TruthTable>(std::move(tt));
+
+  } catch (const std::bad_alloc&) {
+      return out_of_memory<TruthTable>("anf_to_tt");
+  }
 }
 
 } // namespace bmm

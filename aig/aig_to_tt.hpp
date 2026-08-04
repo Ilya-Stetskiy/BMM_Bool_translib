@@ -19,7 +19,8 @@ namespace bmm {
 // точек вычислить значение AIG (топологический проход по узлам,
 // evaluate(node) = AND(evaluate(fanin0), evaluate(fanin1)) с учётом
 // инверсий). Единственная реальная забота — эффективность: для n близких к
-// kMaxTruthTableVars=24 это 16M точек x размер AIG операций.
+// kMaxTruthTableVars (core/common.hpp) это до 2^kMaxTruthTableVars точек x
+// размер AIG операций.
 //
 // Параллелизм: core/CONVENTIONS.md п.6, правило 3 (выход — плоский TT) —
 // OpenMP `#pragma omp parallel for` по индексу точки 0..2^n-1, результат

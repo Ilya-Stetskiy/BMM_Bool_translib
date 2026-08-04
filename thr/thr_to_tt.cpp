@@ -14,8 +14,8 @@ Result<TruthTable> thr_to_tt(const Thr& thr) {
 
     // Защита от переполнения in-memory таблицы (согласно п.3 конвенций)
     if (n > kMaxTruthTableVars) {
-        return fail<TruthTable>(ErrorCode::TooManyVariables, 
-            "Количество переменных превышает 24");
+        return fail<TruthTable>(ErrorCode::TooManyVariables,
+            "Количество переменных превышает " + std::to_string(kMaxTruthTableVars));
     }
 
     TruthTable tt(n);

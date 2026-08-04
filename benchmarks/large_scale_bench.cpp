@@ -218,7 +218,7 @@ void sweep(const char* func_name, Mechanism mech, const std::vector<uint32_t>& s
 }
 
 // TruthTable-производные генераторы (Tt на входе или выходе всегда
-// ограничены kMaxTruthTableVars=24 самой структурой TruthTable — здесь без
+// ограничены kMaxTruthTableVars самой структурой TruthTable — здесь без
 // смысла расти дальше, но и лимит в 12 из growing_test_functions снят: идём
 // до настоящего потолка). kitty::create_random заполняет таблицу случайными
 // битами напрямую, без обхода точка-за-точкой через evaluate().
