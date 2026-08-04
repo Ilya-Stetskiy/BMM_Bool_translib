@@ -497,7 +497,7 @@ void run_all() {
         if (n <= 16) {
             bench_one("anf_to_thr", n, n_mono, [](const Anf& a) { return anf_to_thr(a); }, anf);
         }
-        if (n <= 24) {
+        if (n <= kMaxTruthTableVars) {
             bench_one("anf_to_tt", n, n_mono, [](const Anf& a) { return anf_to_tt(a); }, anf);
         }
     }
@@ -536,7 +536,7 @@ void run_all() {
         if (n <= 16) {
             bench_one("anf_to_thr", n, n_mono, [](const Anf& a) { return anf_to_thr(a); }, anf);
         }
-        if (n <= 24) {
+        if (n <= kMaxTruthTableVars) {
             bench_one("anf_to_tt", n, n_mono, [](const Anf& a) { return anf_to_tt(a); }, anf);
         }
     }

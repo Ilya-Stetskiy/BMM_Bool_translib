@@ -446,6 +446,20 @@ add_test(NAME full_matrix_tests COMMAND test_full_matrix
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # ---------------------------------------------------------------------------
+# test_large_n — независимая (не через growing_test_functions, та сама
+# ограничена kMaxGroundTruthVars=12) проверка корректности anf_to_tt/
+# tt_to_anf на n=20..kMaxTruthTableVars (32) — см. verify/large_n_tests.cpp.
+# Единственный тест в проекте, реально закрывающий диапазон, открытый
+# поднятием kMaxTruthTableVars с 24 до 32 — bench_real_corpus.cpp (замер
+# времени) и остальные ctest-таргеты его не проверяют вовсе.
+# ---------------------------------------------------------------------------
+
+add_executable(test_large_n verify/large_n_tests.cpp)
+target_link_libraries(test_large_n PRIVATE bmm_anf bmm_core)
+add_test(NAME large_n_tests COMMAND test_large_n
+         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# ---------------------------------------------------------------------------
 # test_real_datasets — те же проверки (отдельные функции + round-trip), но
 # на РЕАЛЬНЫХ наборах данных (EPFL AIG-схемы, AES S-box/χ/бент-функция,
 # Коллегия выборщиков США), а не на синтетических growing_test_functions()
