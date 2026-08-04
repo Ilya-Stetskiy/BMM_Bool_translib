@@ -488,6 +488,13 @@ add_executable(diag_anf_dataset verify/diag_anf_dataset.cpp)
 target_link_libraries(diag_anf_dataset PRIVATE bmm_aig bmm_anf bmm_verify bmm_core
                                                 TBB::tbb OpenMP::OpenMP_CXX ortools::ortools)
 
+# ВРЕМЕННЫЙ таргет этой сессии — замер времени X_to_tt/tt_to_X на границе
+# старого (24) и нового (32) kMaxTruthTableVars. Не таргет ctest, удаляется
+# после того как числа записаны.
+add_executable(diag_boundary_timing verify/diag_boundary_timing.cpp)
+target_link_libraries(diag_boundary_timing PRIVATE bmm_aig bmm_bdd bmm_anf bmm_thr bmm_core
+                                                    TBB::tbb OpenMP::OpenMP_CXX ortools::ortools)
+
 add_executable(diag_anf_to_bdd_dataset verify/diag_anf_to_bdd_dataset.cpp)
 target_link_libraries(diag_anf_to_bdd_dataset PRIVATE bmm_anf bmm_bdd bmm_core TBB::tbb)
 
