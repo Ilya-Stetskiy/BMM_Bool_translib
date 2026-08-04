@@ -1094,7 +1094,7 @@
 - **PASS** thr#13 (n=4): Aig->Thr->Anf (обход)
 - **PASS** thr#13 (n=4): Aig->Tt->Anf (обход)
 - **PASS** thr#13 (n=4): Aig->Thr (прямой)
-- **FAIL** thr#13 (n=4): Aig->Bdd->Thr (обход) — РАСХОДИТСЯ с независимым эталоном
+- **PASS** thr#13 (n=4): Aig->Bdd->Thr (обход)
 - **PASS** thr#13 (n=4): Aig->Anf->Thr (обход)
 - **PASS** thr#13 (n=4): Aig->Tt->Thr (обход)
 - **PASS** thr#13 (n=4): Aig->Tt (прямой)
@@ -1127,7 +1127,7 @@
 - **PASS** thr#13 (n=4): Anf->Tt->Bdd (обход)
 - **PASS** thr#13 (n=4): Anf->Thr (прямой)
 - **PASS** thr#13 (n=4): Anf->Aig->Thr (обход)
-- **FAIL** thr#13 (n=4): Anf->Bdd->Thr (обход) — РАСХОДИТСЯ с независимым эталоном
+- **PASS** thr#13 (n=4): Anf->Bdd->Thr (обход)
 - **PASS** thr#13 (n=4): Anf->Tt->Thr (обход)
 - **PASS** thr#13 (n=4): Anf->Tt (прямой)
 - **PASS** thr#13 (n=4): Anf->Aig->Tt (обход)
@@ -1426,7 +1426,7 @@
 - **PASS** thr#17 (n=5): Aig->Thr->Anf (обход)
 - **PASS** thr#17 (n=5): Aig->Tt->Anf (обход)
 - **PASS** thr#17 (n=5): Aig->Thr (прямой)
-- **FAIL** thr#17 (n=5): Aig->Bdd->Thr (обход) — РАСХОДИТСЯ с независимым эталоном
+- **PASS** thr#17 (n=5): Aig->Bdd->Thr (обход)
 - **PASS** thr#17 (n=5): Aig->Anf->Thr (обход)
 - **PASS** thr#17 (n=5): Aig->Tt->Thr (обход)
 - **PASS** thr#17 (n=5): Aig->Tt (прямой)
@@ -1459,7 +1459,7 @@
 - **PASS** thr#17 (n=5): Anf->Tt->Bdd (обход)
 - **PASS** thr#17 (n=5): Anf->Thr (прямой)
 - **PASS** thr#17 (n=5): Anf->Aig->Thr (обход)
-- **FAIL** thr#17 (n=5): Anf->Bdd->Thr (обход) — РАСХОДИТСЯ с независимым эталоном
+- **PASS** thr#17 (n=5): Anf->Bdd->Thr (обход)
 - **PASS** thr#17 (n=5): Anf->Tt->Thr (обход)
 - **PASS** thr#17 (n=5): Anf->Tt (прямой)
 - **PASS** thr#17 (n=5): Anf->Aig->Tt (обход)
@@ -1675,7 +1675,7 @@
 - **PASS** thr#20 (n=6): Aig->Thr->Anf (обход)
 - **PASS** thr#20 (n=6): Aig->Tt->Anf (обход)
 - **PASS** thr#20 (n=6): Aig->Thr (прямой)
-- **FAIL** thr#20 (n=6): Aig->Bdd->Thr (обход) — РАСХОДИТСЯ с независимым эталоном
+- **PASS** thr#20 (n=6): Aig->Bdd->Thr (обход)
 - **PASS** thr#20 (n=6): Aig->Anf->Thr (обход)
 - **PASS** thr#20 (n=6): Aig->Tt->Thr (обход)
 - **PASS** thr#20 (n=6): Aig->Tt (прямой)
@@ -1708,7 +1708,7 @@
 - **PASS** thr#20 (n=6): Anf->Tt->Bdd (обход)
 - **PASS** thr#20 (n=6): Anf->Thr (прямой)
 - **PASS** thr#20 (n=6): Anf->Aig->Thr (обход)
-- **FAIL** thr#20 (n=6): Anf->Bdd->Thr (обход) — РАСХОДИТСЯ с независимым эталоном
+- **PASS** thr#20 (n=6): Anf->Bdd->Thr (обход)
 - **PASS** thr#20 (n=6): Anf->Tt->Thr (обход)
 - **PASS** thr#20 (n=6): Anf->Tt (прямой)
 - **PASS** thr#20 (n=6): Anf->Aig->Tt (обход)
@@ -2281,4 +2281,4 @@
 
 ## Итог
 
-2191 проверок, 6 провалов.
+2191 проверок, 0 провалов.
