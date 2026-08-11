@@ -167,11 +167,22 @@ cmake --build build --target status
 этих размерах" тоже валидный результат. **Не редактируйте `STATUS.md`
 руками** — он перезаписывается при каждом запуске.
 
-**`.github/workflows/ci.yml` в репозитории пока нет** (см. `core/
-CONVENTIONS.md` п.8 за причиной и тем, что нужно, чтобы он появился) — текст
-ниже описывает, как CI ДОЛЖЕН вести себя, когда/если он будет настроен, не
-то, что реально запускается на каждый push/PR сейчас. Пока что делайте то
-же самое вручную: `cmake --build build --target status` локально/в
+**`.github/workflows/ci.yml` теперь есть** (см. `core/CONVENTIONS.md` п.8 за
+историей, почему его не было, и что именно закрывает текущая версия) — но
+это **лёгкий** CI, не полный: он собирает CUDD/Sylvan/mockturtle/m4ri/BRiAl/
+kissat/CaDiCaL/OR-Tools из исходников прямо на GitHub-hosted раннере
+(`ci/install-deps.sh`, версии продублированы из `.devcontainer/Dockerfile`,
+кэшируются), а не переиспользует Docker-образ `genetica-boolean-lib` (тот
+по-прежнему нигде не опубликован — публикация в реестр остаётся отдельной,
+не сделанной задачей). Гоняет `test_aig`/`test_bdd`/`test_anf`/`test_thr`,
+`test_core`, `test_chains`, `test_full_matrix`, `test_large_n`,
+`test_real_datasets` (без скачанных датасетов — SKIP-ается, не падает) и
+`status`-таргет; **исключает** только секции `*_tbb_scaling`/
+`*_openmp_scaling` (91% времени полного `ctest`, см.
+`TEST_TIMING_REPORT.md`, — это бенчмарки параллелизма, не проверка
+корректности) и не скачивает `benchmarks/data/*`/не гоняет
+`large_scale_bench` (тот и не зарегистрирован в `ctest`). Локально —
+делайте то же самое вручную: `cmake --build build --target status` в
 devcontainer. Exhaustive-проверки идут до `verify::kMaxGroundTruthVars`
 включительно (сверяйте актуальное значение в `verify/ground_truth/
 ground_truth.hpp` — не полагайтесь на конкретное число здесь) — для

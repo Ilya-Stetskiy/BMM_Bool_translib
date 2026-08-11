@@ -1,0 +1,123 @@
+name: CI
+
+# "Лёгкий" CI — см. README.md §4 и core/CONVENTIONS.md п.8 за историей, почему
+# его не было раньше (нужен был Docker-образ genetica-boolean-lib, нигде не
+# опубликованный, чтобы GitHub Actions мог его стянуть). Этот workflow
+# заходит с другой стороны: собирает те же зависимости из исходников прямо на
+# GitHub-hosted раннере (ci/install-deps.sh, версии продублированы из
+# .devcontainer/Dockerfile) и кэширует результат — публикация образа в реестр
+# больше не блокер.
+#
+# Что НЕ входит и почему:
+#   - CUDA/GPU-раннер не нужен: в проекте нет .cu/__global__/device-кода,
+#     cuda-gdb в README упомянут только как отладчик, а не зависимость сборки
+#     (проверено отдельно перед тем как заводить этот workflow).
+#   - Conda/Sage/PyTorch/code-server из Dockerfile сюда не идут — это
+#     инструменты интерактивного workspace (Python-биндинг BRiAl через Sage,
+#     GNN-эксперименты, VS Code в браузере), bmm-translib (чистый C++) их не
+#     компилирует и не тестирует.
+#   - TBB/OpenMP scaling-бенчмарки (секции "*_tbb_scaling"/"*_openmp_scaling"
+#     в test_aig/test_anf/test_thr) исключены через `ctest -E` — это 91%
+#     времени полного прогона (632 из 697 с, см. TEST_TIMING_REPORT.md) и по
+#     своей природе не про корректность (PASS означает "измерено", не
+#     "ускорение подтверждено", см. core/CONVENTIONS.md). Все остальные
+#     таргеты — test_chains/test_full_matrix/test_large_n/test_real_datasets —
+#     остаются: они не бенчмарки, не требуют скачанных датасетов
+#     (test_real_datasets корректно SKIP-ает недостающие случаи, а не падает)
+#     и вместе с функциональными секциями укладываются в ~1 минуту.
+#   - Ручной прогон `benchmarks/large_scale_bench` и скачивание
+#     benchmarks/data/* — вне CI по решению из README (не обязательный
+#     прогон на каждый PR).
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch: {}
+
+env:
+  BMM_DEPS_PREFIX: /opt/bmm-deps
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    # Первый прогон (cache miss) может занять больше часа — доминирует сборка
+    # Google OR-Tools с -DBUILD_DEPS=ON (протобуф/abseil из исходников, см.
+    # ci/install-deps.sh). После первого успешного прогона кэш переиспользуется
+    # (ключ — хэш самого install-deps.sh, меняется только при правке версий),
+    # и шаг ниже полностью пропускается.
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Установить системные пакеты (apt)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential gcc g++ cmake ninja-build \
+            autoconf automake libtool m4 pkg-config \
+            libboost-all-dev libgmp-dev libm4ri-dev libm4rie-dev \
+            zlib1g-dev libssl-dev libtbb-dev unzip
+
+      - name: Кэш собранных зависимостей (CUDD/Sylvan/mockturtle/m4ri/BRiAl/kissat/CaDiCaL/OR-Tools)
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.BMM_DEPS_PREFIX }}
+          # Ключ — хэш самого install-deps.sh: версии/теги/коммиты зашиты
+          # прямо в него (см. комментарий в файле), поэтому любая правка
+          # версии зависимости автоматически инвалидирует кэш.
+          key: bmm-deps-${{ runner.os }}-${{ hashFiles('ci/install-deps.sh') }}
+
+      - name: Собрать зависимости из исходников (только при cache miss)
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          chmod +x ci/install-deps.sh
+          ./ci/install-deps.sh
+
+      - name: Прокинуть пути к зависимостям в окружение
+        run: |
+          echo "${BMM_DEPS_PREFIX}/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=${BMM_DEPS_PREFIX}/lib:${BMM_DEPS_PREFIX}/lib64:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=${BMM_DEPS_PREFIX}" >> "$GITHUB_ENV"
+
+      - name: Проверить, что cadical/kissat/BRiAl/Sylvan видны
+        run: |
+          cadical --version
+          kissat --version
+          test -f "${BMM_DEPS_PREFIX}/include/polybori.h"
+          test -f "${BMM_DEPS_PREFIX}/include/sylvan_obj.hpp"
+
+      - name: Кэш FetchContent (Catch2/Tracy/oneTBB-fallback)
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: bmm-fetchcontent-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_PREFIX_PATH="${BMM_DEPS_PREFIX}" \
+            -DMOCKTURTLE_ROOT="${BMM_DEPS_PREFIX}/mockturtle"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: ctest (без TBB/OpenMP scaling-бенчмарков — см. шапку файла)
+        run: |
+          ctest --test-dir build --output-on-failure \
+            -E '(_tbb_scaling|_openmp_scaling)$'
+
+      - name: STATUS.md (cmake --build --target status)
+        run: cmake --build build --target status
+
+      - name: Опубликовать STATUS.md как артефакт
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: STATUS.md
+          path: STATUS.md
