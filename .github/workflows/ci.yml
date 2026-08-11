@@ -22,12 +22,21 @@ name: CI
 #     своей природе не про корректность (PASS означает "измерено", не
 #     "ускорение подтверждено", см. core/CONVENTIONS.md). Все остальные
 #     таргеты — test_chains/test_full_matrix/test_large_n/test_real_datasets —
-#     остаются: они не бенчмарки, не требуют скачанных датасетов
-#     (test_real_datasets корректно SKIP-ает недостающие случаи, а не падает)
-#     и вместе с функциональными секциями укладываются в ~1 минуту.
-#   - Ручной прогон `benchmarks/large_scale_bench` и скачивание
-#     benchmarks/data/* — вне CI по решению из README (не обязательный
-#     прогон на каждый PR).
+#     остаются и вместе с функциональными секциями укладываются в ~1-2 минуты.
+#   - EPFL-датасет (`benchmarks/scripts/download_epfl.sh`) СКАЧИВАЕТСЯ (git
+#     clone --depth 1, дёшево) — вопреки первоначальному плану. Проверено
+#     живым прогоном (2026-08-11): комментарий в CMakeLists.txt, что
+#     `test_real_datasets` "корректно SKIP-ает недостающие EPFL-случаи", не
+#     соответствует реальному поведению `verify/real_datasets_tests.cpp` —
+#     без данных тест реально проваливается (4 FAIL: не удалось загрузить
+#     ctrl/int2float/cavlc/router.aig). Ждёт решения автора — это отдельный
+#     баг несоответствия документации коду, не задача этого workflow чинить
+#     тестовый код; здесь просто перестали полагаться на устаревшее
+#     обещание и скачивают то, что тест реально требует.
+#   - Остальные датасеты (`benchmarks/data/{dimacs-cnf,satlib,iis-nsk,...}`)
+#     и `benchmarks/large_scale_bench` — по-прежнему вне CI: `test_chains`/
+#     `test_full_matrix`/`test_large_n` их не требуют, а `large_scale_bench`
+#     не зарегистрирован в `ctest`.
 #
 # Второй job (asan-ubsan) — та же сборка, но с CMakeLists.txt/BMM_SANITIZE
 # (`-fsanitize=address,undefined`), Debug вместо RelWithDebInfo. Отдельный,
@@ -102,6 +111,17 @@ jobs:
         with:
           path: build/_deps
           key: bmm-fetchcontent-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Кэш EPFL-датасета (test_real_datasets)
+        id: cache-epfl
+        uses: actions/cache@v4
+        with:
+          path: benchmarks/data/epfl
+          key: bmm-epfl-dataset-v1
+
+      - name: Скачать EPFL-датасет (только при cache miss)
+        if: steps.cache-epfl.outputs.cache-hit != 'true'
+        run: ./benchmarks/scripts/download_epfl.sh
 
       - name: Configure
         run: |
@@ -185,6 +205,17 @@ jobs:
           echo "${BMM_DEPS_PREFIX}/bin" >> "$GITHUB_PATH"
           echo "LD_LIBRARY_PATH=${BMM_DEPS_PREFIX}/lib:${BMM_DEPS_PREFIX}/lib64:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
           echo "CMAKE_PREFIX_PATH=${BMM_DEPS_PREFIX}" >> "$GITHUB_ENV"
+
+      - name: Кэш EPFL-датасета (test_real_datasets)
+        id: cache-epfl
+        uses: actions/cache@v4
+        with:
+          path: benchmarks/data/epfl
+          key: bmm-epfl-dataset-v1
+
+      - name: Скачать EPFL-датасет (только при cache miss)
+        if: steps.cache-epfl.outputs.cache-hit != 'true'
+        run: ./benchmarks/scripts/download_epfl.sh
 
       - name: Configure (Debug + ASan/UBSan)
         run: |

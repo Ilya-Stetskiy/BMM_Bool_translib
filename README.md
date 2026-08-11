@@ -197,12 +197,18 @@ kissat/CaDiCaL/OR-Tools из исходников прямо на GitHub-hosted 
 по-прежнему нигде не опубликован — публикация в реестр остаётся отдельной,
 не сделанной задачей). Гоняет `test_aig`/`test_bdd`/`test_anf`/`test_thr`,
 `test_core`, `test_chains`, `test_full_matrix`, `test_large_n`,
-`test_real_datasets` (без скачанных датасетов — SKIP-ается, не падает) и
-`status`-таргет; **исключает** только секции `*_tbb_scaling`/
-`*_openmp_scaling` (91% времени полного `ctest`, см.
+`test_real_datasets` и `status`-таргет; **исключает** только секции
+`*_tbb_scaling`/`*_openmp_scaling` (91% времени полного `ctest`, см.
 `TEST_TIMING_REPORT.md`, — это бенчмарки параллелизма, не проверка
-корректности) и не скачивает `benchmarks/data/*`/не гоняет
-`large_scale_bench` (тот и не зарегистрирован в `ctest`). Локально —
+корректности). Скачивает EPFL-датасет (`benchmarks/scripts/
+download_epfl.sh`) — вопреки первоначальному плану "без скачанных
+датасетов": живой прогон (2026-08-11) показал, что `test_real_datasets`
+БЕЗ EPFL-файлов реально проваливается (4 FAIL), а не SKIP-ает эти случаи,
+как обещает (неточно) комментарий в `CMakeLists.txt` — расхождение
+документации с кодом `verify/real_datasets_tests.cpp`, отдельная, не
+исправленная здесь задача. Остальные датасеты (DIMACS/SATLIB/iis-nsk) и
+`large_scale_bench` — по-прежнему вне CI (не нужны остающимся таргетам /
+не зарегистрирован в `ctest`). Локально —
 делайте то же самое вручную: `cmake --build build --target status` в
 devcontainer. Exhaustive-проверки идут до `verify::kMaxGroundTruthVars`
 включительно (сверяйте актуальное значение в `verify/ground_truth/
