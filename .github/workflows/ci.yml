@@ -38,6 +38,16 @@ name: CI
 #     `test_full_matrix`/`test_large_n` их не требуют, а `large_scale_bench`
 #     не зарегистрирован в `ctest`.
 #
+# Кэш зависимостей — РАЗДЕЛЁН на restore/save (actions/cache/restore +
+# actions/cache/save), не единый `actions/cache@v4`. Причина, найденная
+# живым прогоном (2026-08-11): связанный `actions/cache@v4` сохраняет кэш
+# только если ВЕСЬ job завершился успешно — когда `ctest` падал (см. ниже
+# про EPFL), уже собранные за ~30-40 минут зависимости (CUDD/Sylvan/
+# mockturtle/m4ri/BRiAl/kissat/CaDiCaL/OR-Tools) НЕ сохранялись, и следующий
+# прогон снова пересобирал всё с нуля — дорого именно во время отладки
+# самого CI. `actions/cache/save` с `if: always()` в конце job'а чинит это:
+# кэш сохраняется независимо от исхода `ctest`.
+#
 # Второй job (asan-ubsan) — та же сборка, но с CMakeLists.txt/BMM_SANITIZE
 # (`-fsanitize=address,undefined`), Debug вместо RelWithDebInfo. Отдельный,
 # независимый от build-and-test job — переиспользует тот же кэш зависимостей
@@ -53,6 +63,13 @@ on:
 
 env:
   BMM_DEPS_PREFIX: /opt/bmm-deps
+  # ВАЖНО: ключи кэша НЕ вынесены в этот env-блок как готовые строки —
+  # hashFiles() в workflow-level env вычисляется ДО checkout любого job'а
+  # (файла ci/install-deps.sh ещё не существует на диске раннера в этот
+  # момент), поэтому вернул бы пустую строку и молча сломал инвалидацию
+  # кэша. Каждый `key:` ниже поэтому пишет hashFiles(...) inline, внутри
+  # шага job'а (после checkout) — единственное место, где эта функция
+  # реально видит содержимое файла.
 
 jobs:
   build-and-test:
@@ -77,9 +94,9 @@ jobs:
             libboost-all-dev libgmp-dev libm4ri-dev libm4rie-dev \
             zlib1g-dev libssl-dev libtbb-dev unzip
 
-      - name: Кэш собранных зависимостей (CUDD/Sylvan/mockturtle/m4ri/BRiAl/kissat/CaDiCaL/OR-Tools)
+      - name: Restore кэш собранных зависимостей (CUDD/Sylvan/mockturtle/m4ri/BRiAl/kissat/CaDiCaL/OR-Tools)
         id: cache-deps
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ${{ env.BMM_DEPS_PREFIX }}
           # Ключ — хэш самого install-deps.sh: версии/теги/коммиты зашиты
@@ -112,16 +129,16 @@ jobs:
           path: build/_deps
           key: bmm-fetchcontent-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
 
-      - name: Кэш EPFL-датасета (test_real_datasets)
+      - name: Restore кэш EPFL-датасета (test_real_datasets)
         id: cache-epfl
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: benchmarks/data/epfl
           key: bmm-epfl-dataset-v1
 
       - name: Скачать EPFL-датасет (только при cache miss)
         if: steps.cache-epfl.outputs.cache-hit != 'true'
-        run: ./benchmarks/scripts/download_epfl.sh
+        run: bash benchmarks/scripts/download_epfl.sh
 
       - name: Configure
         run: |
@@ -147,6 +164,24 @@ jobs:
         with:
           name: STATUS.md
           path: STATUS.md
+
+      # Save — ПОСЛЕДними, if: always(), после ctest/build. См. комментарий в
+      # шапке файла: единый actions/cache@v4 сохранял бы кэш только при
+      # успехе всего job'а, теряя уже собранные (за ~30-40 минут) зависимости
+      # при каждом падении ctest.
+      - name: Save кэш зависимостей (если был cache miss)
+        if: always() && steps.cache-deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.BMM_DEPS_PREFIX }}
+          key: bmm-deps-${{ runner.os }}-${{ hashFiles('ci/install-deps.sh') }}
+
+      - name: Save кэш EPFL-датасета (если был cache miss)
+        if: always() && steps.cache-epfl.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: benchmarks/data/epfl
+          key: bmm-epfl-dataset-v1
 
   # ---------------------------------------------------------------------------
   # asan-ubsan — продолжение методологии, уже подтвердившей себя на
@@ -187,9 +222,9 @@ jobs:
             libboost-all-dev libgmp-dev libm4ri-dev libm4rie-dev \
             zlib1g-dev libssl-dev libtbb-dev unzip
 
-      - name: Кэш собранных зависимостей (общий с build-and-test — тот же ключ)
+      - name: Restore кэш собранных зависимостей (общий с build-and-test — тот же ключ)
         id: cache-deps
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ${{ env.BMM_DEPS_PREFIX }}
           key: bmm-deps-${{ runner.os }}-${{ hashFiles('ci/install-deps.sh') }}
@@ -206,16 +241,16 @@ jobs:
           echo "LD_LIBRARY_PATH=${BMM_DEPS_PREFIX}/lib:${BMM_DEPS_PREFIX}/lib64:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
           echo "CMAKE_PREFIX_PATH=${BMM_DEPS_PREFIX}" >> "$GITHUB_ENV"
 
-      - name: Кэш EPFL-датасета (test_real_datasets)
+      - name: Restore кэш EPFL-датасета (test_real_datasets)
         id: cache-epfl
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: benchmarks/data/epfl
           key: bmm-epfl-dataset-v1
 
       - name: Скачать EPFL-датасет (только при cache miss)
         if: steps.cache-epfl.outputs.cache-hit != 'true'
-        run: ./benchmarks/scripts/download_epfl.sh
+        run: bash benchmarks/scripts/download_epfl.sh
 
       - name: Configure (Debug + ASan/UBSan)
         run: |
@@ -232,3 +267,17 @@ jobs:
         run: |
           ctest --test-dir build-asan --output-on-failure \
             -E '(_tbb_scaling|_openmp_scaling)$'
+
+      - name: Save кэш зависимостей (если был cache miss)
+        if: always() && steps.cache-deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.BMM_DEPS_PREFIX }}
+          key: bmm-deps-${{ runner.os }}-${{ hashFiles('ci/install-deps.sh') }}
+
+      - name: Save кэш EPFL-датасета (если был cache miss)
+        if: always() && steps.cache-epfl.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: benchmarks/data/epfl
+          key: bmm-epfl-dataset-v1
