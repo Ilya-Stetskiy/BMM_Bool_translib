@@ -148,6 +148,27 @@ FetchContent при первой сборке; CaDiCaL/kissat — только �
 `aig/`/`bdd/`/`anf/`/`thr/`, найдите свою секцию по имени функции и
 гоняйте только её, пока не увидите PASS.
 
+## 3а. Sanitizers (ASan/UBSan)
+
+Продолжение методологии, уже нашедшей реальную гонку в BRiAl через
+ThreadSanitizer (`aig/README.md` §1.3) — `-DBMM_SANITIZE=address,undefined`
+в `CMakeLists.txt` инструментирует сборку `-fsanitize=address,undefined`:
+
+```sh
+cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug -DBMM_SANITIZE=address,undefined
+cmake --build build-asan --parallel
+ctest --test-dir build-asan --output-on-failure
+```
+
+Пусто по умолчанию — обычная сборка (`cmake -S . -B build`, без флага) не
+теряет в скорости/памяти ради проверки, которую включают осознанно. Гоняется
+и в CI (`.github/workflows/ci.yml`, job `asan-ubsan`) — там же `continue-
+on-error: true`, пока не подтверждено живым прогоном (см. `CHANGELOG.md`
+"Known issues"): CUDD/Sylvan/mockturtle/m4ri/BRiAl/OR-Tools сами собраны
+БЕЗ санитайзеров (см. комментарий у `BMM_SANITIZE` в `CMakeLists.txt`), и
+не исключены ложные срабатывания на границе с ними, требующие точечных
+`ASAN_OPTIONS`/`UBSAN_OPTIONS`-подавлений, а не правки кода bmm-translib.
+
 ## 4. Прочитать STATUS.md
 
 ```sh

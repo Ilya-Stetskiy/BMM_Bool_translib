@@ -46,6 +46,12 @@
   Гоняет весь `ctest`, кроме секций `*_tbb_scaling`/`*_openmp_scaling` (91%
   времени полного прогона, см. `TEST_TIMING_REPORT.md`, — про измерение
   параллелизма, не про корректность).
+- `CMakeLists.txt`/`BMM_SANITIZE` — опция `-DBMM_SANITIZE=address,undefined`
+  (ASan/UBSan), продолжение методологии, уже нашедшей реальную гонку в BRiAl
+  через ThreadSanitizer (`aig/README.md` §1.3). Пусто по умолчанию. Гоняется
+  в CI отдельным job'ом (`asan-ubsan` в `.github/workflows/ci.yml`), см.
+  README.md §3а за деталями и оговоркой про неинструментированные
+  зависимости (CUDD/Sylvan/mockturtle/m4ri/BRiAl/OR-Tools).
 
 ### Changed
 - Единая политика перехвата исключений во всех функциях трансляции: только
@@ -103,3 +109,11 @@
   не сделанная задача; если/когда она случится, можно рассмотреть переход
   на неё как на более быстрый путь (без пересборки OR-Tools на каждый
   cache miss).
+- `asan-ubsan` job (см. Added выше) намеренно с `continue-on-error: true` —
+  не проверялся вживую (та же причина, что и у основного CI выше). Известный
+  риск: CUDD/Sylvan/mockturtle/m4ri/BRiAl/OR-Tools собраны без санитайзеров
+  — не исключены ложные срабатывания на границе с ними (нестандартные
+  аллокаторы Sylvan, глобальное состояние protobuf/OR-Tools), которые
+  потребуют точечных `ASAN_OPTIONS`/`UBSAN_OPTIONS`-подавлений, а не правки
+  кода bmm-translib. Снять `continue-on-error`, когда это подтвердится хотя
+  бы одним зелёным прогоном.

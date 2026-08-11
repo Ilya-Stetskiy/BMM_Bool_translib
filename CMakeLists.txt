@@ -19,6 +19,33 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)  # для clangd/IDE
 
 option(BMM_ENABLE_TRACY "Собрать с активным Tracy-инструментированием (ZoneScoped и т.п.)" ON)
 
+# ---------------------------------------------------------------------------
+# Sanitizers (ASan/UBSan) — продолжение методологии, уже подтвердившей себя
+# на ThreadSanitizer (см. core/CONVENTIONS.md, aig/README.md §1.3 — реальная
+# гонка в BRiAl найдена именно так). Пусто по умолчанию: обычная сборка не
+# должна молча терять в скорости/памяти ради проверки, которую включают
+# осознанно.
+#
+# Пример: cmake -S . -B build-asan -DBMM_SANITIZE=address,undefined
+#         -DCMAKE_BUILD_TYPE=Debug   (Debug — -O0, точные стектрейсы; ASan
+#         обычно всё равно работает и на RelWithDebInfo, но хуже для отладки)
+#
+# ЧЕСТНАЯ ОГОВОРКА: инструментируются только этот проект + Catch2/Tracy/
+# TBB-fallback (FetchContent, добавлены в дерево ПОСЛЕ этого блока — CMake
+# распространяет COMPILE_OPTIONS на таргеты, созданные позже в том же
+# дереве директорий). CUDD/Sylvan/mockturtle/m4ri/BRiAl/kissat/CaDiCaL/
+# OR-Tools собраны заранее (см. .devcontainer/Dockerfile, ci/install-deps.sh)
+# БЕЗ санитайзеров — как обычно для таких прогонов, ASan перехватывает
+# malloc/free всего процесса и всё равно ловит переполнения/UAF на границе с
+# ними со стороны кода bmm-translib, но не находит баги ВНУТРИ самих этих
+# библиотек.
+set(BMM_SANITIZE "" CACHE STRING "Список через запятую для -fsanitize=... (напр. address,undefined). Пусто = выключено.")
+if(BMM_SANITIZE)
+    message(STATUS "Sanitizers: -fsanitize=${BMM_SANITIZE} (см. комментарий выше про то, что НЕ инструментируется)")
+    add_compile_options(-fsanitize=${BMM_SANITIZE} -fno-omit-frame-pointer -fno-sanitize-recover=all)
+    add_link_options(-fsanitize=${BMM_SANITIZE})
+endif()
+
 include(FetchContent)
 find_package(Threads REQUIRED)
 

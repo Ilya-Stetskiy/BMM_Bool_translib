@@ -28,6 +28,12 @@ name: CI
 #   - Ручной прогон `benchmarks/large_scale_bench` и скачивание
 #     benchmarks/data/* — вне CI по решению из README (не обязательный
 #     прогон на каждый PR).
+#
+# Второй job (asan-ubsan) — та же сборка, но с CMakeLists.txt/BMM_SANITIZE
+# (`-fsanitize=address,undefined`), Debug вместо RelWithDebInfo. Отдельный,
+# независимый от build-and-test job — переиспользует тот же кэш зависимостей
+# (ключ идентичен, деп-либы сами не инструментированы санитайзерами).
+# `continue-on-error: true` там временно — см. комментарий у самого job'а.
 
 on:
   push:
@@ -121,3 +127,77 @@ jobs:
         with:
           name: STATUS.md
           path: STATUS.md
+
+  # ---------------------------------------------------------------------------
+  # asan-ubsan — продолжение методологии, уже подтвердившей себя на
+  # ThreadSanitizer (см. core/CONVENTIONS.md, aig/README.md §1.3 — так нашли
+  # реальную гонку в BRiAl). Независимый job, не `needs: build-and-test` —
+  # тот же кэш зависимостей (ключ идентичен, deps не пересобираются с
+  # санитайзерами, см. CMakeLists.txt/BMM_SANITIZE), но раздельная сборка
+  # bmm-translib (Debug, не RelWithDebInfo — точнее стектрейсы).
+  #
+  # `continue-on-error: true` — временно, до первого живого прогона. Sylvan/
+  # BRiAl/OR-Tools сами не инструментированы (см. комментарий в
+  # CMakeLists.txt) — не исключено, что первый реальный запуск вскроет
+  # ложные срабатывания на границе с ними (нестандартные аллокаторы Sylvan,
+  # глобальное состояние OR-Tools/protobuf и т.п.), которые потребуют
+  # точечных ASAN_OPTIONS/UBSAN_OPTIONS-подавлений, а не сигнализируют о
+  # реальном баге bmm-translib. Снять continue-on-error, когда это будет
+  # проверено хотя бы одним зелёным прогоном.
+  # ---------------------------------------------------------------------------
+  asan-ubsan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    continue-on-error: true
+
+    env:
+      ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Установить системные пакеты (apt)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential gcc g++ cmake ninja-build \
+            autoconf automake libtool m4 pkg-config \
+            libboost-all-dev libgmp-dev libm4ri-dev libm4rie-dev \
+            zlib1g-dev libssl-dev libtbb-dev unzip
+
+      - name: Кэш собранных зависимостей (общий с build-and-test — тот же ключ)
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.BMM_DEPS_PREFIX }}
+          key: bmm-deps-${{ runner.os }}-${{ hashFiles('ci/install-deps.sh') }}
+
+      - name: Собрать зависимости из исходников (только при cache miss)
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          chmod +x ci/install-deps.sh
+          ./ci/install-deps.sh
+
+      - name: Прокинуть пути к зависимостям в окружение
+        run: |
+          echo "${BMM_DEPS_PREFIX}/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=${BMM_DEPS_PREFIX}/lib:${BMM_DEPS_PREFIX}/lib64:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=${BMM_DEPS_PREFIX}" >> "$GITHUB_ENV"
+
+      - name: Configure (Debug + ASan/UBSan)
+        run: |
+          cmake -S . -B build-asan \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBMM_SANITIZE=address,undefined \
+            -DCMAKE_PREFIX_PATH="${BMM_DEPS_PREFIX}" \
+            -DMOCKTURTLE_ROOT="${BMM_DEPS_PREFIX}/mockturtle"
+
+      - name: Build
+        run: cmake --build build-asan --parallel
+
+      - name: ctest (без TBB/OpenMP scaling-бенчмарков — не про корректность)
+        run: |
+          ctest --test-dir build-asan --output-on-failure \
+            -E '(_tbb_scaling|_openmp_scaling)$'
