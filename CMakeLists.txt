@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)  # EXCLUDE_FROM_ALL в FetchContent_Declare (см. ниже) требует 3.28+
-# Версия — только для генерации bmm-translibConfigVersion.cmake (см. install()
-# в конце файла); полноценное версионирование (тег/CHANGELOG) — отдельная,
-# ещё не сделанная задача.
+# Версия — для генерации bmm-translibConfigVersion.cmake (см. install() в
+# конце файла) И для git-тега: см. CHANGELOG.md — `v0.1.0` соответствует
+# именно этому значению, бампайте оба синхронно при следующем релизе.
 project(bmm-translib VERSION 0.1.0 LANGUAGES CXX)
 
 # ---------------------------------------------------------------------------
