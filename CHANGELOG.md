@@ -8,6 +8,19 @@
 
 ## [Unreleased]
 
+### Changed
+- `ci/install-deps.sh` → `scripts/install-deps.sh` — переименован и
+  переописан как общий bootstrap-скрипт зависимостей (CUDD/Sylvan/
+  mockturtle/m4ri/BRiAl/kissat/CaDiCaL/OR-Tools), не только для CI: строит
+  тот же layout из исходников на любой Ubuntu 24.04-совместимой машине
+  через `BMM_DEPS_PREFIX`/`BMM_DEPS_JOBS_OR_TOOLS` (последняя — новая,
+  раньше `-j2` для OR-Tools был захардкожен). Это практический ответ на
+  пробел "нерелокейтабл-пакет" (`cmake/bmm-translibConfig.cmake.in`,
+  README.md §4б) — не полный vcpkg/Conan-порт (для этого нет портов ни
+  у одной из трёх библиотек, отдельная кратно более дорогая задача), а
+  воспроизводимая сборка с нуля где угодно. README.md/CMakeLists.txt/
+  `cmake/bmm-translibConfig.cmake.in`/`core/CONVENTIONS.md` обновлены.
+
 ### Fixed
 - `verify/real_datasets_tests.cpp`: отсутствие `benchmarks/data/epfl`
   (недокачанный датасет) роняло весь `test_real_datasets` через

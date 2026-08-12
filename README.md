@@ -190,7 +190,7 @@ cmake --build build --target status
 историей, почему его не было, и что именно закрывает текущая версия) — но
 это **лёгкий** CI, не полный: он собирает CUDD/Sylvan/mockturtle/m4ri/BRiAl/
 kissat/CaDiCaL/OR-Tools из исходников прямо на GitHub-hosted раннере
-(`ci/install-deps.sh`, версии продублированы из `.devcontainer/Dockerfile`,
+(`scripts/install-deps.sh`, версии продублированы из `.devcontainer/Dockerfile`,
 кэшируются), а не переиспользует Docker-образ `genetica-boolean-lib` (тот
 по-прежнему нигде не опубликован — публикация в реестр остаётся отдельной,
 не сделанной задачей). Гоняет `test_aig`/`test_bdd`/`test_anf`/`test_thr`,
@@ -269,14 +269,33 @@ target_link_libraries(my_app PRIVATE bmm::bmm_aig bmm::bmm_core)
 
 **Честная оговорка** (подробнее — `cmake/bmm-translibConfig.cmake.in`):
 Sylvan/BRiAl/mockturtle не имеют собственного CMake-пакета в этом окружении
-— их абсолютные пути "запечены" в экспортируемые таргеты как есть. Пакет
-воспроизводимо работает на машине с тем же layout зависимостей (тот же
-Docker-образ `genetica-boolean-lib` или его копия), но не является
-универсально релокейтабл-пакетом. TBB и Tracy устанавливаются вместе с
-bmm-translib (нужны при финальной линковке даже там, где сама библиотека
-линкует их `PRIVATE` — для статических библиотек это не освобождает
-потребителя от необходимости их предоставить); OpenMP/OR-Tools — реальные
-системные пакеты, потребитель находит их сам через свой `find_package`.
+— их абсолютные пути "запечены" в экспортируемые таргеты как есть, поэтому
+пакет не является универсально релокейтабл-пакетом в общем смысле CMake
+(vcpkg/Conan-порта ни для одной из трёх библиотек нет). TBB и Tracy
+устанавливаются вместе с bmm-translib (нужны при финальной линковке даже
+там, где сама библиотека линкует их `PRIVATE` — для статических библиотек
+это не освобождает потребителя от необходимости их предоставить);
+OpenMP/OR-Tools — реальные системные пакеты, потребитель находит их сам
+через свой `find_package`.
+
+**Портируемость на практике** — не через relocatable-пакет, а через
+воспроизводимую сборку зависимостей: [`scripts/install-deps.sh`](scripts/install-deps.sh)
+(тот же скрипт, что использует CI, см. §4 выше) строит тот же layout
+Sylvan/BRiAl/mockturtle/CUDD/m4ri/kissat/CaDiCaL/OR-Tools из исходников на
+любой Ubuntu 24.04-совместимой машине, без Docker-образа `genetica-
+boolean-lib` вообще:
+
+```sh
+BMM_DEPS_PREFIX=$HOME/bmm-deps ./scripts/install-deps.sh
+cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/bmm-deps \
+      -DMOCKTURTLE_ROOT=$HOME/bmm-deps/mockturtle
+```
+
+По умолчанию скрипт ставит в `/opt/bmm-deps` (удобно для CI/root-контейнеров
+вроде Coder-workspace, где `coder`-пользователь имеет `sudo`, см.
+`.devcontainer/Dockerfile`) — для локального запуска вне CI/devcontainer
+переопределите `BMM_DEPS_PREFIX` на путь в своём `$HOME`, как в примере
+выше, чтобы не понадобился root.
 
 ## 5. Контракт и конвенции
 

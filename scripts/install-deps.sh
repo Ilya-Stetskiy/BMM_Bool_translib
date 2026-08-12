@@ -1,24 +1,45 @@
 #!/usr/bin/env bash
-# ci/install-deps.sh — сборка нетривиальных C++-зависимостей bmm-translib из
-# исходников для GitHub Actions (CUDD, Sylvan, mockturtle-заголовки, m4ri,
-# BRiAl, kissat, CaDiCaL, Google OR-Tools).
+# scripts/install-deps.sh — сборка нетривиальных C++-зависимостей
+# bmm-translib из исходников (CUDD, Sylvan, mockturtle-заголовки, m4ri,
+# BRiAl, kissat, CaDiCaL, Google OR-Tools) в самодостаточный префикс.
+#
+# ДВА РЕЖИМА ИСПОЛЬЗОВАНИЯ — файл один и тот же, менять ничего не нужно:
+#   1. CI (.github/workflows/ci.yml) — вызывается на чистом GitHub-hosted
+#      раннере, результат кэшируется между прогонами.
+#   2. Любая другая машина БЕЗ Docker-образа genetica-boolean-lib — это и
+#      есть практический ответ на "портируемость" (см. честную оговорку в
+#      README.md §4б/cmake/bmm-translibConfig.cmake.in про то, что
+#      экспортируемый CMake-пакет не релокейтабл: полного vcpkg/Conan-порта
+#      для Sylvan/BRiAl/mockturtle нет и не планируется — но ЭТОТ скрипт
+#      воспроизводимо строит тот же layout зависимостей на любой Ubuntu
+#      24.04-совместимой машине, из исходников, без Docker вообще).
+#      Запуск:
+#        BMM_DEPS_PREFIX=$HOME/bmm-deps ./scripts/install-deps.sh
+#        cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/bmm-deps \
+#              -DMOCKTURTLE_ROOT=$HOME/bmm-deps/mockturtle
+#      Префикс по умолчанию — /opt/bmm-deps (см. PREFIX ниже), это удобно
+#      для CI/root-контейнеров, но требует sudo на большинстве обычных
+#      Linux-машин (root владеет /opt) — для локального запуска ВНЕ
+#      CI/devcontainer переопределите BMM_DEPS_PREFIX на что-то в своём
+#      $HOME, как в примере выше, чтобы не нужен был root вообще.
 #
 # Источник истины по версиям/тегам/коммитам — .devcontainer/Dockerfile (блоки
 # CUDD/Sylvan/mockturtle/kissat/CaDiCaL/m4ri/BRiAl/OR-Tools). Версии здесь
 # ПРОДУБЛИРОВАНЫ, не переиспользованы напрямую из Dockerfile (тот собирает
 # полный интерактивный workspace-образ с CUDA/conda/Sage/PyTorch/code-server,
-# ничего из этого CI не нужно — незачем гонять docker build в GitHub Actions
+# ничего из этого CI/локальной сборке не нужно — незачем гонять docker build
 # только чтобы прочитать оттуда 7 строк с версиями). Если меняете версию в
 # Dockerfile — поменяйте и здесь, и наоборот (тот же принцип, что уже
 # применяется к common.hpp/CONVENTIONS.md в этом проекте).
 #
-# Отличия от Dockerfile, все — намеренные CI-only оптимизации, не имеющие
-# отношения к самим зависимостям:
-#   - ставим в отдельный префикс /opt/bmm-deps, не /usr/local (см.
-#     .github/workflows/ci.yml — так безопаснее кэшировать директорию, не
-#     трогая то, что раннер уже держит в /usr/local);
+# Отличия от Dockerfile, все — намеренные оптимизации для сборки "с нуля" вне
+# интерактивного workspace, не имеющие отношения к самим зависимостям:
+#   - ставим в отдельный (настраиваемый) префикс, не /usr/local (проще
+#     кэшировать в CI, не трогая то, что раннер уже держит в /usr/local; вне
+#     CI — не требует root при выборе префикса в $HOME, см. выше);
 #   - без ldconfig (нестандартный префикс и так не в ld.so-путях по
-#     умолчанию; LD_LIBRARY_PATH выставляется в workflow);
+#     умолчанию; LD_LIBRARY_PATH нужно выставить самостоятельно — см. пример
+#     выше и .github/workflows/ci.yml за тем, как это делает CI);
 #   - mockturtle: только `cmake configure` (может генерировать служебные
 #     заголовки), без `make` — bmm-translib использует mockturtle исключительно
 #     как header-only include-путь (см. комментарий в корневом
@@ -26,17 +47,26 @@
 #     собственные объектники/примеры mockturtle никуда не линкуются;
 #   - OR-Tools собирается с -j2, не -j8/nproc: тот же риск OOM, что уже
 #     задокументирован в Dockerfile для сборки protobuf/abseil из исходников
-#     (-DBUILD_DEPS=ON), на стандартном GitHub-hosted раннере (4 vCPU/16 ГБ)
-#     запас по памяти меньше, чем на выделенной машине из Dockerfile-истории.
+#     (-DBUILD_DEPS=ON) — на менее мощной машине (в т.ч. типичный CI-раннер,
+#     4 vCPU/16 ГБ) запас по памяти меньше, чем на выделенной машине из
+#     Dockerfile-истории; если у вас мощная локальная машина — можно смело
+#     поднять JOBS_OR_TOOLS ниже вручную.
 #
 # Не идемпотентен по своей природе (`git clone` в существующую директорию
-# упадёт) — рассчитан на запуск ровно один раз на чистом раннере, при
-# cache-miss (см. workflow: шаг пропускается целиком при cache-hit).
+# упадёт) — рассчитан на запуск на чистом/пустом префиксе (в CI это
+# гарантируется cache-miss veтвлением в workflow; локально — просто не
+# запускайте дважды на одну и ту же директорию, или удалите её перед
+# повторным запуском).
 
 set -euo pipefail
 
 PREFIX="${BMM_DEPS_PREFIX:-/opt/bmm-deps}"
 JOBS="$(nproc)"
+# Отдельная переменная для OR-Tools (не JOBS) — см. предупреждение выше про
+# OOM при -DBUILD_DEPS=ON на слабой машине; переопределяйте явно
+# (BMM_DEPS_JOBS_OR_TOOLS=8 ./scripts/install-deps.sh), если знаете, что
+# памяти достаточно, вместо того чтобы менять число в файле.
+JOBS_OR_TOOLS="${BMM_DEPS_JOBS_OR_TOOLS:-2}"
 
 mkdir -p "$PREFIX"/{include,lib,bin,src}
 cd "$PREFIX/src"
@@ -118,13 +148,13 @@ make install
 cd "$PREFIX/src"
 echo "::endgroup::"
 
-echo "::group::Google OR-Tools v9.11 (-j2 — см. предупреждение об OOM в шапке файла)"
+echo "::group::Google OR-Tools v9.11 (JOBS_OR_TOOLS=$JOBS_OR_TOOLS — см. предупреждение об OOM в шапке файла)"
 git clone --depth 1 --branch v9.11 https://github.com/google/or-tools.git or-tools
 cd or-tools
 cmake -S. -Bbuild -DCMAKE_BUILD_TYPE=Release -DBUILD_DEPS=ON \
       -DBUILD_EXAMPLES=OFF -DBUILD_SAMPLES=OFF -DBUILD_TESTING=OFF \
       -DCMAKE_INSTALL_PREFIX="$PREFIX"
-cmake --build build --config Release -j2
+cmake --build build --config Release -j"$JOBS_OR_TOOLS"
 cmake --install build
 cd "$PREFIX/src"
 echo "::endgroup::"

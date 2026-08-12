@@ -345,7 +345,7 @@ Docker-образ `.devcontainer/Dockerfile` и публиковать его в
 **есть**, но зашёл с другой стороны — не через публикацию образа (та всё
 ещё не сделана и остаётся отдельной задачей на будущее), а через сборку тех
 же зависимостей из исходников прямо на GitHub-hosted раннере
-(`ci/install-deps.sh`, версии продублированы из `Dockerfile` — не
+(`scripts/install-deps.sh`, версии продублированы из `Dockerfile` — не
 переиспользованы напрямую, т.к. Dockerfile тянет ещё и CUDA/conda/Sage/
 PyTorch/code-server, которые чистому C++-CI не нужны). Результат кэшируется
 (`actions/cache`, ключ — хэш `install-deps.sh`) — первый прогон долгий
@@ -353,10 +353,12 @@ PyTorch/code-server, которые чистому C++-CI не нужны). Ре
 из кэша. Это **лёгкий** CI: гоняет весь `ctest`, кроме секций
 `*_tbb_scaling`/`*_openmp_scaling` (91% времени полного прогона, см.
 `TEST_TIMING_REPORT.md`, — про измерение параллелизма, не про
-корректность), не скачивает `benchmarks/data/*` и не гоняет
-`benchmarks/large_scale_bench` (не зарегистрирован в `ctest`). CUDA-раннер
-не понадобился — в проекте нет `.cu`/device-кода, `cuda-gdb` в README
-использовался только как отладчик.
+корректность). Скачивает EPFL-датасет (`benchmarks/scripts/
+download_epfl.sh`, нужен `test_real_datasets`), остальные датасеты
+(DIMACS/SATLIB/iis-nsk) и `benchmarks/large_scale_bench` — по-прежнему вне
+CI (не нужны остающимся таргетам / не зарегистрирован в `ctest`).
+CUDA-раннер не понадобился — в проекте нет `.cu`/device-кода, `cuda-gdb` в
+README использовался только как отладчик.
 
 ## 9. Когда переводу нужен `_with_strategy`-вариант
 

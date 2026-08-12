@@ -4,7 +4,7 @@ name: CI
 # его не было раньше (нужен был Docker-образ genetica-boolean-lib, нигде не
 # опубликованный, чтобы GitHub Actions мог его стянуть). Этот workflow
 # заходит с другой стороны: собирает те же зависимости из исходников прямо на
-# GitHub-hosted раннере (ci/install-deps.sh, версии продублированы из
+# GitHub-hosted раннере (scripts/install-deps.sh, версии продублированы из
 # .devcontainer/Dockerfile) и кэширует результат — публикация образа в реестр
 # больше не блокер.
 #
@@ -64,7 +64,7 @@ env:
   BMM_DEPS_PREFIX: /opt/bmm-deps
   # ВАЖНО: ключи кэша НЕ вынесены в этот env-блок как готовые строки —
   # hashFiles() в workflow-level env вычисляется ДО checkout любого job'а
-  # (файла ci/install-deps.sh ещё не существует на диске раннера в этот
+  # (файла scripts/install-deps.sh ещё не существует на диске раннера в этот
   # момент), поэтому вернул бы пустую строку и молча сломал инвалидацию
   # кэша. Каждый `key:` ниже поэтому пишет hashFiles(...) inline, внутри
   # шага job'а (после checkout) — единственное место, где эта функция
@@ -75,7 +75,7 @@ jobs:
     runs-on: ubuntu-24.04
     # Первый прогон (cache miss) может занять больше часа — доминирует сборка
     # Google OR-Tools с -DBUILD_DEPS=ON (протобуф/abseil из исходников, см.
-    # ci/install-deps.sh). После первого успешного прогона кэш переиспользуется
+    # scripts/install-deps.sh). После первого успешного прогона кэш переиспользуется
     # (ключ — хэш самого install-deps.sh, меняется только при правке версий),
     # и шаг ниже полностью пропускается.
     timeout-minutes: 180
@@ -101,13 +101,13 @@ jobs:
           # Ключ — хэш самого install-deps.sh: версии/теги/коммиты зашиты
           # прямо в него (см. комментарий в файле), поэтому любая правка
           # версии зависимости автоматически инвалидирует кэш.
-          key: bmm-deps-${{ runner.os }}-${{ hashFiles('ci/install-deps.sh') }}
+          key: bmm-deps-${{ runner.os }}-${{ hashFiles('scripts/install-deps.sh') }}
 
       - name: Собрать зависимости из исходников (только при cache miss)
         if: steps.cache-deps.outputs.cache-hit != 'true'
         run: |
-          chmod +x ci/install-deps.sh
-          ./ci/install-deps.sh
+          chmod +x scripts/install-deps.sh
+          ./scripts/install-deps.sh
 
       - name: Прокинуть пути к зависимостям в окружение
         run: |
@@ -173,7 +173,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ env.BMM_DEPS_PREFIX }}
-          key: bmm-deps-${{ runner.os }}-${{ hashFiles('ci/install-deps.sh') }}
+          key: bmm-deps-${{ runner.os }}-${{ hashFiles('scripts/install-deps.sh') }}
 
       - name: Save кэш EPFL-датасета (если был cache miss)
         if: always() && steps.cache-epfl.outputs.cache-hit != 'true'
@@ -224,13 +224,13 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.BMM_DEPS_PREFIX }}
-          key: bmm-deps-${{ runner.os }}-${{ hashFiles('ci/install-deps.sh') }}
+          key: bmm-deps-${{ runner.os }}-${{ hashFiles('scripts/install-deps.sh') }}
 
       - name: Собрать зависимости из исходников (только при cache miss)
         if: steps.cache-deps.outputs.cache-hit != 'true'
         run: |
-          chmod +x ci/install-deps.sh
-          ./ci/install-deps.sh
+          chmod +x scripts/install-deps.sh
+          ./scripts/install-deps.sh
 
       - name: Прокинуть пути к зависимостям в окружение
         run: |
@@ -270,7 +270,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ env.BMM_DEPS_PREFIX }}
-          key: bmm-deps-${{ runner.os }}-${{ hashFiles('ci/install-deps.sh') }}
+          key: bmm-deps-${{ runner.os }}-${{ hashFiles('scripts/install-deps.sh') }}
 
       - name: Save кэш EPFL-датасета (если был cache miss)
         if: always() && steps.cache-epfl.outputs.cache-hit != 'true'
