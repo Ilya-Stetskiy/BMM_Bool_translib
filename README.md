@@ -162,12 +162,10 @@ ctest --test-dir build-asan --output-on-failure
 
 Пусто по умолчанию — обычная сборка (`cmake -S . -B build`, без флага) не
 теряет в скорости/памяти ради проверки, которую включают осознанно. Гоняется
-и в CI (`.github/workflows/ci.yml`, job `asan-ubsan`) — там же `continue-
-on-error: true`, пока не подтверждено живым прогоном (см. `CHANGELOG.md`
-"Known issues"): CUDD/Sylvan/mockturtle/m4ri/BRiAl/OR-Tools сами собраны
-БЕЗ санитайзеров (см. комментарий у `BMM_SANITIZE` в `CMakeLists.txt`), и
-не исключены ложные срабатывания на границе с ними, требующие точечных
-`ASAN_OPTIONS`/`UBSAN_OPTIONS`-подавлений, а не правки кода bmm-translib.
+и в CI (`.github/workflows/ci.yml`, job `asan-ubsan`) — подтверждено живым
+прогоном (2026-08-11, см. `CHANGELOG.md`): ни одного срабатывания ASan/UBSan,
+несмотря на то, что CUDD/Sylvan/mockturtle/m4ri/BRiAl/OR-Tools сами собраны
+БЕЗ санитайзеров (см. комментарий у `BMM_SANITIZE` в `CMakeLists.txt`).
 
 ## 4. Прочитать STATUS.md
 
