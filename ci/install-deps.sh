@@ -57,7 +57,18 @@ echo "::group::Sylvan v1.10.0"
 git clone --depth 1 --branch v1.10.0 https://github.com/trolando/sylvan.git sylvan
 cd sylvan
 mkdir build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PREFIX" ..
+# -DLACE_NATIVE_OPT=OFF — КРИТИЧНО для CI, не для .devcontainer (там сборка
+# и запуск на одной и той же машине, риска нет). Sylvan тянет Lace через
+# FetchContent (github.com/trolando/lace v1.6.0); у Lace
+# LACE_NATIVE_OPT=ON по умолчанию (-march=native). На GitHub-hosted раннере
+# кэш $PREFIX собирается на одной физической VM, а восстанавливается позже
+# на ДРУГОЙ (разный набор физических хостов в пуле) — бинарник, слинкованный
+# с -march=native первой машины, падает с SIGILL ("Illegal instruction") на
+# второй, если её CPU не поддерживает те же инструкции. Найдено живым
+# прогоном CI (2026-08-12): все тестовые бинари падали в CatchAddTests
+# (discover_tests) сразу при старте — bmm_core линкует Sylvan+Lace
+# безусловно, поэтому падало абсолютно всё.
+cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PREFIX" -DLACE_NATIVE_OPT=OFF ..
 make -j"$JOBS"
 make install
 cd "$PREFIX/src"
