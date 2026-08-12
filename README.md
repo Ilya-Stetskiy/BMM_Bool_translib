@@ -200,13 +200,15 @@ kissat/CaDiCaL/OR-Tools из исходников прямо на GitHub-hosted 
 `TEST_TIMING_REPORT.md`, — это бенчмарки параллелизма, не проверка
 корректности). Скачивает EPFL-датасет (`benchmarks/scripts/
 download_epfl.sh`) — вопреки первоначальному плану "без скачанных
-датасетов": живой прогон (2026-08-11) показал, что `test_real_datasets`
-БЕЗ EPFL-файлов реально проваливается (4 FAIL), а не SKIP-ает эти случаи,
-как обещает (неточно) комментарий в `CMakeLists.txt` — расхождение
-документации с кодом `verify/real_datasets_tests.cpp`, отдельная, не
-исправленная здесь задача. Остальные датасеты (DIMACS/SATLIB/iis-nsk) и
-`large_scale_bench` — по-прежнему вне CI (не нужны остающимся таргетам /
-не зарегистрирован в `ctest`). Локально —
+датасетов", чтобы реально проверить EPFL-случаи `test_real_datasets`, а не
+полагаться на SKIP. Живой прогон (2026-08-11) сначала нашёл, что этот SKIP
+не работал (`verify/real_datasets_tests.cpp` роняло весь тест через
+`rep.bullet(false, ...)` вместо `rep.line("- SKIP ...")` — расхождение с
+собственным комментарием в `CMakeLists.txt`) — исправлено в коде теста (см.
+`CHANGELOG.md`), но датасет всё равно качаем: без него EPFL-случаи не
+проверяются вовсе, только пропускаются. Остальные датасеты (DIMACS/SATLIB/
+iis-nsk) и `large_scale_bench` — по-прежнему вне CI (не нужны остающимся
+таргетам / не зарегистрирован в `ctest`). Локально —
 делайте то же самое вручную: `cmake --build build --target status` в
 devcontainer. Exhaustive-проверки идут до `verify::kMaxGroundTruthVars`
 включительно (сверяйте актуальное значение в `verify/ground_truth/
