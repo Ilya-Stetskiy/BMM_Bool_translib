@@ -83,6 +83,17 @@
   падал под Clang в `fuzz-smoke` — GCC получает OpenMP через `libgomp`
   (часть пакета `gcc`), Clang `-fopenmp` требует отдельный `libomp-dev`,
   не входивший в apt-список этого job'а. Исправлено.
+- **Портируемость (`scripts/install-deps.sh`) подтверждена живым прогоном
+  "с нуля" на "сыром" устройстве** (2026-08-14, сервер 192.168.1.61):
+  чистый контейнер `ubuntu:24.04` — не `.devcontainer`-образ, без
+  CI-кэша зависимостей — apt-пакеты из `.github/workflows/ci.yml` →
+  `scripts/install-deps.sh` (сборка CUDD/Sylvan/mockturtle/m4ri/BRiAl/
+  kissat/CaDiCaL/OR-Tools из исходников) → `cmake`-сборка → полный
+  `ctest`. Результат: 30/30 тестов пройдено, включая `real_datasets_tests`
+  (корректно SKIP без EPFL-датасета — тот же фикс, что выше в `Fixed`,
+  подтверждён и вне CI). Первая проверка портируемости не на GitHub-hosted
+  раннере и не на предсобранном Docker-образе, а на действительно пустой
+  машине.
 
 ## [0.1.0] - 2026-08-11
 

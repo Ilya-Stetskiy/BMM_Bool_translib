@@ -323,6 +323,12 @@ cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/bmm-deps \
 переопределите `BMM_DEPS_PREFIX` на путь в своём `$HOME`, как в примере
 выше, чтобы не понадобился root.
 
+Проверено не только по описанию скрипта, но и живым прогоном "с нуля" на
+действительно пустой машине (2026-08-14): чистый контейнер `ubuntu:24.04`
+(без `.devcontainer`-образа, без CI-кэша зависимостей) — только apt-пакеты
+из `.github/workflows/ci.yml`, затем `scripts/install-deps.sh` →
+`cmake`-сборка → полный `ctest`. Результат — 30/30 тестов пройдено.
+
 **`find_package` живьём проверен** — [`examples/external_consumer/`](examples/external_consumer)
 это отдельный CMake-проект (не таргет в этом же `build/` дереве, как
 `examples/quickstart_*.cpp`), собираемый в CI (`build-and-test`) против
