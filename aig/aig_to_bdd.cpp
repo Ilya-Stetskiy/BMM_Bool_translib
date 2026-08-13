@@ -215,7 +215,7 @@ Result<Bdd> aig_to_bdd_with_heuristic(const Aig& aig, VariableOrderHeuristic heu
     return ok<Bdd>(Bdd(final_bdd, aig.n_vars(), rank));
 
   } catch (const std::bad_alloc&) {
-      return fail<Bdd>(ErrorCode::OutOfMemory, "aig_to_bdd: исчерпана память");
+      return out_of_memory<Bdd>("aig_to_bdd");
   }
 }
 

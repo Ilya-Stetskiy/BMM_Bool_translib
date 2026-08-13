@@ -43,11 +43,11 @@
 // Сборка (временный CMake-таргет добавлен вручную в конце этого запуска,
 // не через основной CMakeLists.txt — см. команду в конце файла).
 
-#include "anf/anf_to_aig.hpp"
-#include "anf/anf_to_bdd.hpp"
-#include "anf/anf_to_thr.hpp"
-#include "anf/anf_to_tt.hpp"
-#include "anf/tt_to_anf.hpp"
+#include <bmm/anf/anf_to_aig.hpp>
+#include <bmm/anf/anf_to_bdd.hpp>
+#include <bmm/anf/anf_to_thr.hpp>
+#include <bmm/anf/anf_to_tt.hpp>
+#include <bmm/anf/tt_to_anf.hpp>
 
 #include <sylvan_obj.hpp>
 
@@ -497,7 +497,7 @@ void run_all() {
         if (n <= 16) {
             bench_one("anf_to_thr", n, n_mono, [](const Anf& a) { return anf_to_thr(a); }, anf);
         }
-        if (n <= 24) {
+        if (n <= kMaxTruthTableVars) {
             bench_one("anf_to_tt", n, n_mono, [](const Anf& a) { return anf_to_tt(a); }, anf);
         }
     }
@@ -536,7 +536,7 @@ void run_all() {
         if (n <= 16) {
             bench_one("anf_to_thr", n, n_mono, [](const Anf& a) { return anf_to_thr(a); }, anf);
         }
-        if (n <= 24) {
+        if (n <= kMaxTruthTableVars) {
             bench_one("anf_to_tt", n, n_mono, [](const Anf& a) { return anf_to_tt(a); }, anf);
         }
     }

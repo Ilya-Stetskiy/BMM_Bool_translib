@@ -28,18 +28,18 @@
 // опциональный бинарь, как benchmarks/bench_real_corpus.cpp. Пишет
 // benchmarks/LARGE_SCALE_REPORT.md.
 
-#include "aig/aig_to_anf.hpp"
-#include "aig/aig_to_thr.hpp"
-#include "aig/aig_to_tt.hpp"
-#include "aig/tt_to_aig.hpp"
-#include "anf/anf_to_aig.hpp"
-#include "anf/anf_to_thr.hpp"
-#include "anf/anf_to_tt.hpp"
-#include "anf/tt_to_anf.hpp"
-#include "thr/thr_to_aig.hpp"
-#include "thr/thr_to_anf.hpp"
-#include "thr/thr_to_tt.hpp"
-#include "thr/tt_to_thr.hpp"
+#include <bmm/aig/aig_to_anf.hpp>
+#include <bmm/aig/aig_to_thr.hpp>
+#include <bmm/aig/aig_to_tt.hpp>
+#include <bmm/aig/tt_to_aig.hpp>
+#include <bmm/anf/anf_to_aig.hpp>
+#include <bmm/anf/anf_to_thr.hpp>
+#include <bmm/anf/anf_to_tt.hpp>
+#include <bmm/anf/tt_to_anf.hpp>
+#include <bmm/thr/thr_to_aig.hpp>
+#include <bmm/thr/thr_to_anf.hpp>
+#include <bmm/thr/thr_to_tt.hpp>
+#include <bmm/thr/tt_to_thr.hpp>
 
 #include "benchmarks/large_scale_generators.hpp"
 #include "benchmarks/scaling.hpp"
@@ -218,7 +218,7 @@ void sweep(const char* func_name, Mechanism mech, const std::vector<uint32_t>& s
 }
 
 // TruthTable-производные генераторы (Tt на входе или выходе всегда
-// ограничены kMaxTruthTableVars=24 самой структурой TruthTable — здесь без
+// ограничены kMaxTruthTableVars самой структурой TruthTable — здесь без
 // смысла расти дальше, но и лимит в 12 из growing_test_functions снят: идём
 // до настоящего потолка). kitty::create_random заполняет таблицу случайными
 // битами напрямую, без обхода точка-за-точкой через evaluate().

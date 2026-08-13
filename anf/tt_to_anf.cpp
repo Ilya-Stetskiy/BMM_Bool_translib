@@ -99,6 +99,12 @@ Result<Anf> tt_to_anf(const TruthTable& tt)
 
     const uint64_t rows = 1ULL << n;
 
+  // ДОБАВЛЕНО (kMaxTruthTableVars поднят с 24 до 32, core/common.hpp):
+  // coeff ниже — 1 БАЙТ на строку, не бит — 16 МБ при n=24, но 4 ГБ при
+  // n=32. На старом лимите такая аллокация не могла реалистично
+  // провалиться, поэтому catch не было; на новом — может (см. её же
+  // обоснование в anf_to_tt.cpp, зеркальная функция).
+  try {
 
     // ===================================
     // Копирование truth table
@@ -182,6 +188,10 @@ Result<Anf> tt_to_anf(const TruthTable& tt)
 
     return ok<Anf>(Anf(std::move(poly), n));
 #endif
+
+  } catch (const std::bad_alloc&) {
+      return out_of_memory<Anf>("tt_to_anf");
+  }
 }
 
 

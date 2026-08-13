@@ -31,7 +31,7 @@
 
 #pragma once
 
-#include "core/common.hpp"
+#include <bmm/core/common.hpp>
 #include "verify/sat_encoding/sat_encoding.hpp"
 
 #include <cstdint>

@@ -255,9 +255,7 @@ Result<Thr> anf_to_thr(const Anf& anf)
             result_theta));
 
   } catch (const std::bad_alloc&) {
-      return fail<Thr>(ErrorCode::OutOfMemory, "anf_to_thr: исчерпана память при построении ILP-модели");
-  } catch (const std::exception& e) {
-      return fail<Thr>(ErrorCode::InvalidArgument, std::string("anf_to_thr error: ") + e.what());
+      return out_of_memory<Thr>("anf_to_thr");
   }
 }
 

@@ -299,7 +299,7 @@ void run_indirect_vs_direct(Report& rep) {
         // представление?") — bdd_to_thr работает НАПРЯМУЮ только для K<=6
         // (CHOW_DATABASE, см. bdd/README.md §5.4а), K>6 -> NotImplemented.
         // Bdd->Tt->Thr обходит эту границу: bdd_to_tt работает для любого
-        // n<=kMaxTruthTableVars=24, а tt_to_thr — общий ILP-путь (Muroga),
+        // n<=kMaxTruthTableVars, а tt_to_thr — общий ILP-путь (Muroga),
         // не завязанный на маленькую справочную таблицу. n=7/9/11/13 —
         // нечётные (только там "maj_nX" существует в growing_test_functions,
         // majority определена только для нечётного n), все СТРОГО БОЛЬШЕ

@@ -6,11 +6,11 @@
 
 #include <iostream>
 
-#include "bdd/bdd_to_aig.hpp"
-#include "bdd/bdd_to_anf.hpp"
-#include "bdd/bdd_to_thr.hpp"
-#include "bdd/bdd_to_tt.hpp"
-#include "bdd/tt_to_bdd.hpp"
+#include <bmm/bdd/bdd_to_aig.hpp>
+#include <bmm/bdd/bdd_to_anf.hpp>
+#include <bmm/bdd/bdd_to_thr.hpp>
+#include <bmm/bdd/bdd_to_tt.hpp>
+#include <bmm/bdd/tt_to_bdd.hpp>
 #include "verify/reference_builders.hpp"
 #include "verify/test_runner.hpp"
 

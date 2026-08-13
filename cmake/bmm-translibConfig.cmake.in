@@ -1,0 +1,47 @@
+@PACKAGE_INIT@
+
+# bmm-translibConfig.cmake — потребляется downstream-проектом через
+# find_package(bmm-translib REQUIRED) + target_link_libraries(... bmm::bmm_aig
+# bmm::bmm_bdd ...) (см. README.md/CMakeLists.txt "install()/export()" за
+# полным объяснением, что именно экспортируется).
+#
+# ЧЕСТНАЯ ОГОВОРКА (см. тот же комментарий в CMakeLists.txt): Sylvan/BRiAl/
+# mockturtle подключены в bmm_core через find_path/find_library с
+# АБСОЛЮТНЫМИ путями (у них самих нет собственного CMake-пакета в этом
+# окружении) — они уже "запечены" в bmm-translibTargets.cmake как есть, тут
+# заново find_dependency их не делаем и не можем (нечего find_package'ить).
+# Поэтому этот Config.cmake воспроизводимо работает на машине с ТЕМ ЖЕ
+# layout зависимостей, а не как полностью релокейтабл-пакет в общем смысле
+# CMake (нет vcpkg/Conan-порта ни для одной из трёх библиотек). Практически
+# это не привязка именно к Docker-образу genetica-boolean-lib — `scripts/
+# install-deps.sh` в корне репозитория воспроизводимо строит тот же layout
+# из исходников на любой Ubuntu 24.04-совместимой машине, с настраиваемым
+# префиксом (см. комментарий в шапке скрипта); достаточно указать тот же
+# `CMAKE_PREFIX_PATH` при экспорте и при потреблении.
+#
+# Threads/TBB/OpenMP/ortools — реальные CMake-пакеты (стандартный модуль
+# либо собственный Config от поставщика), поэтому find_dependency, а не
+# запечённый абсолютный путь. bmm_aig/bmm_bdd/bmm_anf/bmm_thr линкуют их
+# как PRIVATE — но для СТАТИЧЕСКИХ библиотек это не освобождает потребителя
+# от необходимости предоставить их при финальной линковке своего
+# приложения (PRIVATE работает для include-путей/compile-definitions, не
+# для самого факта линковки статического архива) — отсюда find_dependency
+# здесь, а не молчаливое ожидание, что потребитель сам догадается. TBB и
+# OR-Tools нужно принести самостоятельно (системный пакет либо свой
+# FetchContent — см. README.md), это не бандлится вместе с bmm-translib.
+#
+# Tracy — исключение: он собирается через FetchContent БЕЗ EXCLUDE_FROM_ALL
+# (см. CMakeLists.txt) и устанавливается вместе с bmm-translib именно затем,
+# чтобы find_dependency(Tracy) ниже отработал без дополнительных действий
+# со стороны потребителя.
+
+include(CMakeFindDependencyMacro)
+find_dependency(Threads REQUIRED)
+find_dependency(TBB REQUIRED)
+find_dependency(OpenMP REQUIRED)
+find_dependency(ortools CONFIG REQUIRED)
+find_dependency(Tracy CONFIG REQUIRED)
+
+include("${CMAKE_CURRENT_LIST_DIR}/bmm-translibTargets.cmake")
+
+check_required_components(bmm-translib)

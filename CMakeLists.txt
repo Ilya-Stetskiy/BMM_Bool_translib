@@ -1,5 +1,8 @@
-cmake_minimum_required(VERSION 3.24)
-project(bmm-translib CXX)
+cmake_minimum_required(VERSION 3.28)  # EXCLUDE_FROM_ALL в FetchContent_Declare (см. ниже) требует 3.28+
+# Версия — для генерации bmm-translibConfigVersion.cmake (см. install() в
+# конце файла) И для git-тега: см. CHANGELOG.md — `v0.1.0` соответствует
+# именно этому значению, бампайте оба синхронно при следующем релизе.
+project(bmm-translib VERSION 0.1.0 LANGUAGES CXX)
 
 # ---------------------------------------------------------------------------
 # Общие настройки
@@ -15,6 +18,33 @@ endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)  # для clangd/IDE
 
 option(BMM_ENABLE_TRACY "Собрать с активным Tracy-инструментированием (ZoneScoped и т.п.)" ON)
+
+# ---------------------------------------------------------------------------
+# Sanitizers (ASan/UBSan) — продолжение методологии, уже подтвердившей себя
+# на ThreadSanitizer (см. core/CONVENTIONS.md, aig/README.md §1.3 — реальная
+# гонка в BRiAl найдена именно так). Пусто по умолчанию: обычная сборка не
+# должна молча терять в скорости/памяти ради проверки, которую включают
+# осознанно.
+#
+# Пример: cmake -S . -B build-asan -DBMM_SANITIZE=address,undefined
+#         -DCMAKE_BUILD_TYPE=Debug   (Debug — -O0, точные стектрейсы; ASan
+#         обычно всё равно работает и на RelWithDebInfo, но хуже для отладки)
+#
+# ЧЕСТНАЯ ОГОВОРКА: инструментируются только этот проект + Catch2/Tracy/
+# TBB-fallback (FetchContent, добавлены в дерево ПОСЛЕ этого блока — CMake
+# распространяет COMPILE_OPTIONS на таргеты, созданные позже в том же
+# дереве директорий). CUDD/Sylvan/mockturtle/m4ri/BRiAl/kissat/CaDiCaL/
+# OR-Tools собраны заранее (см. .devcontainer/Dockerfile, scripts/install-deps.sh)
+# БЕЗ санитайзеров — как обычно для таких прогонов, ASan перехватывает
+# malloc/free всего процесса и всё равно ловит переполнения/UAF на границе с
+# ними со стороны кода bmm-translib, но не находит баги ВНУТРИ самих этих
+# библиотек.
+set(BMM_SANITIZE "" CACHE STRING "Список через запятую для -fsanitize=... (напр. address,undefined). Пусто = выключено.")
+if(BMM_SANITIZE)
+    message(STATUS "Sanitizers: -fsanitize=${BMM_SANITIZE} (см. комментарий выше про то, что НЕ инструментируется)")
+    add_compile_options(-fsanitize=${BMM_SANITIZE} -fno-omit-frame-pointer -fno-sanitize-recover=all)
+    add_link_options(-fsanitize=${BMM_SANITIZE})
+endif()
 
 include(FetchContent)
 find_package(Threads REQUIRED)
@@ -124,6 +154,13 @@ if(NOT TBB_FOUND)
         GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
         GIT_TAG v2021.13.0
         GIT_SHALLOW TRUE
+        # БЕЗ EXCLUDE_FROM_ALL — та же причина, что и у tracy ниже: bmm_aig/
+        # bmm_anf/bmm_thr линкуют TBB::tbb как PRIVATE, но для статических
+        # библиотек потребитель всё равно обязан предоставить TBB при
+        # финальной линковке. В ЭТОМ конкретном окружении (единый Docker-
+        # образ на весь курс) системного TBB нет вовсе (см. find_package(TBB
+        # QUIET) выше) — значит и потребителю неоткуда его взять, кроме как
+        # через установленную вместе с bmm-translib копию. Ставим её.
     )
     FetchContent_MakeAvailable(oneTBB)
 endif()
@@ -159,6 +196,12 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
     GIT_TAG v3.5.2  # если тег устарел на момент сборки — обновите на актуальный релиз Catch2
     GIT_SHALLOW TRUE
+    # В отличие от TBB/Tracy ниже — EXCLUDE_FROM_ALL оставлен: Catch2 нужен
+    # только для сборки/тестов ЭТОГО репозитория, ни один экспортируемый
+    # bmm_<format> не линкует его даже PRIVATE, внешнему потребителю библиотеки
+    # он не нужен вообще ни в каком виде — без EXCLUDE_FROM_ALL install()
+    # ниже заодно потащил бы его в install-дерево bmm-translib без причины.
+    EXCLUDE_FROM_ALL
 )
 FetchContent_MakeAvailable(Catch2)
 
@@ -176,8 +219,46 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/wolfpld/tracy.git
     GIT_TAG v0.11.1
     GIT_SHALLOW TRUE
+    # БЕЗ EXCLUDE_FROM_ALL, в отличие от Catch2 ниже: bmm_aig/bmm_bdd/
+    # bmm_anf/bmm_thr линкуют TracyClient как PRIVATE, но для СТАТИЧЕСКИХ
+    # библиотек это всё равно попадает в экспортируемый link-интерфейс
+    # (потребитель обязан предоставить Tracy::TracyClient при финальной
+    # линковке своего приложения, PRIVATE тут не спасает — работает только
+    # для include-путей/compile-definitions, не для самого факта линковки
+    # статического архива). У Tracy есть собственный релокейтабл
+    # TracyConfig.cmake — устанавливаем её вместе с bmm-translib (см.
+    # cmake/bmm-translibConfig.cmake.in: find_dependency(Tracy)),
+    # а не заставляем потребителя доставать её самостоятельно.
 )
 FetchContent_MakeAvailable(tracy)
+
+# ---------------------------------------------------------------------------
+# Публичный include-неймспейс bmm/ — core/common.hpp и все 20 функций
+# трансляции подключаются везде в дереве (и внутри самого репозитория, и
+# из внешнего проекта после `find_package`) как
+# `#include <bmm/core/common.hpp>`, `#include <bmm/aig/aig_to_bdd.hpp>` и
+# т.д. — совпадает с C++ `namespace bmm`, в котором и так лежит весь код.
+#
+# Физически core/, aig/, bdd/, anf/, thr/ остаются на прежних местах в
+# корне репозитория (не переносим — на них ссылаются CONVENTIONS.md,
+# READMEs каждой папки и весь студенческий workflow "открой aig/
+# aig_to_bdd.cpp"), поэтому для сборки ВНУТРИ дерева генерируем symlink-
+# прослойку в build/ (${BMM_INCLUDE_ROOT}/bmm/<module> -> <module>/) и
+# добавляем её в include-пути bmm_core. Для УСТАНОВЛЕННОГО дерева ниже есть
+# отдельный `install(DIRECTORY ...)` на реальные .hpp (см. секцию install()
+# в конце файла) — та же логика, но не symlink, а физическая копия
+# заголовков под <prefix>/include/bmm/.
+# ---------------------------------------------------------------------------
+
+set(BMM_INCLUDE_ROOT "${CMAKE_BINARY_DIR}/_bmm_include")
+file(MAKE_DIRECTORY "${BMM_INCLUDE_ROOT}/bmm")
+foreach(_bmm_module core aig bdd anf thr)
+    if(NOT EXISTS "${BMM_INCLUDE_ROOT}/bmm/${_bmm_module}")
+        file(CREATE_LINK "${CMAKE_CURRENT_SOURCE_DIR}/${_bmm_module}"
+                          "${BMM_INCLUDE_ROOT}/bmm/${_bmm_module}"
+                          SYMBOLIC)
+    endif()
+endforeach()
 
 # ---------------------------------------------------------------------------
 # bmm_core — INTERFACE: core/common.hpp header-only, но собирает все
@@ -185,8 +266,19 @@ FetchContent_MakeAvailable(tracy)
 # ---------------------------------------------------------------------------
 
 add_library(bmm_core INTERFACE)
+# CMAKE_CURRENT_SOURCE_DIR/BMM_INCLUDE_ROOT обёрнуты в $<BUILD_INTERFACE:...>
+# — оба пути лежат внутри дерева этого проекта (source/build), и
+# install(EXPORT ...) ниже ОБЯЗАН это требование соблюсти (иначе ошибка
+# конфигурации "contains path ... which is prefixed in the build/source
+# directory"): для установленного потребителя эти пути не существуют, вместо
+# них подставляется $<INSTALL_INTERFACE:...> из INCLUDES DESTINATION у
+# install(TARGETS ...). MOCKTURTLE_ROOT (/opt/mockturtle) в эту проверку не
+# попадает — это абсолютный путь ВНЕ дерева проекта (тот же компромисс,
+# что описан в cmake/bmm-translibConfig.cmake.in: работает на машине с тем
+# же layout зависимостей, не полностью релокейтабл).
 target_include_directories(bmm_core INTERFACE
-    "${CMAKE_CURRENT_SOURCE_DIR}"
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<BUILD_INTERFACE:${BMM_INCLUDE_ROOT}>
     "${MOCKTURTLE_ROOT}/include"
     ${MOCKTURTLE_LIB_INCLUDES}
 )
@@ -333,6 +425,21 @@ catch_discover_tests(test_thr)
 catch_discover_tests(test_core)
 
 # ---------------------------------------------------------------------------
+# examples/ — минимальные автономные примеры вызова библиотеки БЕЗ Catch2/
+# bmm_verify (см. examples/README.md). В отличие от test_<format>.cpp они не
+# используют verify::run_translation_tests<X,Y> — только сама функция
+# трансляции и её прямой Result<T>. Не зарегистрированы в ctest — это не
+# тесты корректности (та же функция уже проверена в test_bdd/test_aig), а
+# демонстрация вызова для внешнего потребителя библиотеки.
+# ---------------------------------------------------------------------------
+
+add_executable(example_quickstart_bdd examples/quickstart_bdd.cpp)
+target_link_libraries(example_quickstart_bdd PRIVATE bmm_bdd bmm_core)
+
+add_executable(example_quickstart_non_bdd examples/quickstart_non_bdd.cpp)
+target_link_libraries(example_quickstart_non_bdd PRIVATE bmm_aig bmm_core)
+
+# ---------------------------------------------------------------------------
 # test_chains — round-trip/циклы/прямой-vs-обходной путь между всеми пятью
 # представлениями (см. verify/chain_tests.cpp). ПОСТОЯННЫЙ таргет (не
 # удаляется), в отличие от bench_*/diag_*: дополняет тесты отдельных функций
@@ -344,6 +451,39 @@ add_executable(test_chains verify/chain_tests.cpp)
 target_link_libraries(test_chains PRIVATE bmm_aig bmm_bdd bmm_anf bmm_thr bmm_verify bmm_core
                                            TBB::tbb OpenMP::OpenMP_CXX ortools::ortools)
 add_test(NAME chain_tests COMMAND test_chains
+         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# ---------------------------------------------------------------------------
+# test_full_matrix — ПОЛНАЯ матрица всех пар (X,Y) и всех обходных Z (см.
+# verify/full_matrix_tests.cpp), в отличие от test_chains "Часть 3" (курируемый
+# список, только время) — здесь ВСЕ комбинации без исключения, и проверяется
+# совпадение РЕЗУЛЬТАТА с независимым эталоном, не факт, что путь выполнился.
+#
+# ЭТОТ ТЕСТ МОЖЕТ ПАДАТЬ ПРЯМО СЕЙЧАС — известная причина: bdd_to_thr
+# игнорирует Bdd::var_at_level() для входов с нестандартным порядком уровней
+# (таких как выход anf_to_bdd по умолчанию), см. doc-комментарий в самом
+# verify/full_matrix_tests.cpp. Это ожидаемо и НЕ повод удалять/подавлять
+# тест — задача исправить bdd_to_thr отдельная (не в этой правке).
+# ---------------------------------------------------------------------------
+
+add_executable(test_full_matrix verify/full_matrix_tests.cpp)
+target_link_libraries(test_full_matrix PRIVATE bmm_aig bmm_bdd bmm_anf bmm_thr bmm_verify bmm_core
+                                                TBB::tbb OpenMP::OpenMP_CXX ortools::ortools)
+add_test(NAME full_matrix_tests COMMAND test_full_matrix
+         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# ---------------------------------------------------------------------------
+# test_large_n — независимая (не через growing_test_functions, та сама
+# ограничена kMaxGroundTruthVars=12) проверка корректности anf_to_tt/
+# tt_to_anf на n=20..kMaxTruthTableVars (32) — см. verify/large_n_tests.cpp.
+# Единственный тест в проекте, реально закрывающий диапазон, открытый
+# поднятием kMaxTruthTableVars с 24 до 32 — bench_real_corpus.cpp (замер
+# времени) и остальные ctest-таргеты его не проверяют вовсе.
+# ---------------------------------------------------------------------------
+
+add_executable(test_large_n verify/large_n_tests.cpp)
+target_link_libraries(test_large_n PRIVATE bmm_anf bmm_core)
+add_test(NAME large_n_tests COMMAND test_large_n
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # ---------------------------------------------------------------------------
@@ -374,6 +514,13 @@ add_test(NAME real_datasets_tests COMMAND test_real_datasets
 add_executable(diag_anf_dataset verify/diag_anf_dataset.cpp)
 target_link_libraries(diag_anf_dataset PRIVATE bmm_aig bmm_anf bmm_verify bmm_core
                                                 TBB::tbb OpenMP::OpenMP_CXX ortools::ortools)
+
+# ВРЕМЕННЫЙ таргет этой сессии — замер времени X_to_tt/tt_to_X на границе
+# старого (24) и нового (32) kMaxTruthTableVars. Не таргет ctest, удаляется
+# после того как числа записаны.
+add_executable(diag_boundary_timing verify/diag_boundary_timing.cpp)
+target_link_libraries(diag_boundary_timing PRIVATE bmm_aig bmm_bdd bmm_anf bmm_thr bmm_core
+                                                    TBB::tbb OpenMP::OpenMP_CXX ortools::ortools)
 
 add_executable(diag_anf_to_bdd_dataset verify/diag_anf_to_bdd_dataset.cpp)
 target_link_libraries(diag_anf_to_bdd_dataset PRIVATE bmm_anf bmm_bdd bmm_core TBB::tbb)
@@ -424,6 +571,73 @@ if(CUDD_INCLUDE_DIR AND CUDD_LIBRARY)
 else()
     message(STATUS "CUDD (libcudd) не найден — diag_dddmp_probe/мост DDDMP->Sylvan недоступны")
 endif()
+
+# ---------------------------------------------------------------------------
+# install()/export() — find_package(bmm-translib) со стороны внешнего
+# проекта. Раньше подключить библиотеку можно было, только скопировав
+# исходники внутрь своего дерева и вручную повторив список файлов/линковок
+# из этого CMakeLists.txt — теперь это `find_package(bmm-translib REQUIRED)`
+# + `target_link_libraries(... bmm::bmm_aig ...)`, как для любой обычной
+# CMake-библиотеки.
+#
+# ЧЕСТНАЯ ОГОВОРКА (см. cmake/bmm-translibConfig.cmake.in за подробностями):
+# Sylvan/BRiAl/mockturtle не поставляют собственный CMake-пакет в этом
+# окружении — bmm_core подключает их через find_path/find_library с
+# абсолютными путями (см. начало файла), и эти абсолютные пути "запекаются"
+# в экспортируемые таргеты как есть. Это значит: экспорт НЕ является
+# полностью релокейтабл-пакетом в общем смысле CMake (нет vcpkg/Conan-порта
+# ни для одной из трёх библиотек, писать свой — отдельная, кратно более
+# дорогая задача) — но воспроизводимость на ПРОИЗВОЛЬНОЙ машине (не только
+# на копии Docker-образа genetica-boolean-lib) всё же есть: `scripts/
+# install-deps.sh` строит тот же layout зависимостей из исходников на любой
+# Ubuntu 24.04-совместимой машине (используется и в CI, и годится для
+# локального запуска — см. комментарий в шапке самого скрипта). Практический
+# путь портируемости — пересобрать зависимости этим скриптом с нужным
+# `CMAKE_PREFIX_PATH`, а не полагаться на бинарную совместимость экспорта.
+# ---------------------------------------------------------------------------
+
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+install(TARGETS bmm_core bmm_aig bmm_bdd bmm_anf bmm_thr
+    EXPORT bmm-translibTargets
+    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+    INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+)
+
+# Только .hpp (не .cpp/test_*.cpp/README.md/*.inc) — под
+# <prefix>/include/bmm/<module>, тот же путь, что и symlink-прослойка
+# bmm/<module> для сборки внутри дерева (см. выше, до add_library(bmm_core)).
+foreach(_bmm_module core aig bdd anf thr)
+    install(DIRECTORY "${_bmm_module}/"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/bmm/${_bmm_module}"
+        FILES_MATCHING PATTERN "*.hpp"
+    )
+endforeach()
+
+install(EXPORT bmm-translibTargets
+    FILE bmm-translibTargets.cmake
+    NAMESPACE bmm::
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/bmm-translib"
+)
+
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/bmm-translibConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/bmm-translibConfig.cmake"
+    INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/bmm-translib"
+)
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/bmm-translibConfigVersion.cmake"
+    VERSION "${PROJECT_VERSION}"
+    COMPATIBILITY SameMajorVersion
+)
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/bmm-translibConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/bmm-translibConfigVersion.cmake"
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/bmm-translib"
+)
 
 # ---------------------------------------------------------------------------
 # status — прогоняет все 4 тестовых бинаря + bmm_config_dump, генерирует

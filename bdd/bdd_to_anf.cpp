@@ -303,12 +303,18 @@ public:
         auto& raw_tt = tt.raw();
         uint32_t n = raw_tt.num_vars();
 
+        // ИСПРАВЛЕНО: bit/step/limit были uint32_t с литералом 1u — при n=32
+        // (kMaxTruthTableVars, core/common.hpp) `1u << 32` уже undefined
+        // behavior (сдвиг на ширину самого типа), раньше не проявлялось
+        // только потому что старый kMaxTruthTableVars=24 не пускал n дальше
+        // 24. 64-битные типы и 1ULL — тот же паттерн, что и везде в проекте
+        // (anf/anf_to_tt.cpp, anf/tt_to_anf.cpp), безопасны вплоть до n=63.
         for (uint32_t i = 0; i < n; ++i) {
-            uint32_t bit = 1u << i;
-            uint32_t step = bit << 1;
-            uint32_t limit = 1u << n;
-            for (uint32_t j = 0; j < limit; j += step) {
-                for (uint32_t k = 0; k < bit; ++k) {
+            uint64_t bit = 1ULL << i;
+            uint64_t step = bit << 1;
+            uint64_t limit = 1ULL << n;
+            for (uint64_t j = 0; j < limit; j += step) {
+                for (uint64_t k = 0; k < bit; ++k) {
                     // Быстрое преобразование Мёбиуса (TT -> коэффициенты
                     // Жегалкина): XOR нижней половины блока В верхнюю —
                     // направление проверено вручную для n=1 (см.
@@ -404,9 +410,7 @@ Result<Anf> bdd_to_anf(const Bdd& bdd) {
 #endif
 
     } catch (const std::bad_alloc&) {
-        return fail<Anf>(ErrorCode::OutOfMemory, "bdd_to_anf: исчерпана память");
-    } catch (const std::exception& e) {
-        return fail<Anf>(ErrorCode::InvalidArgument, std::string("bdd_to_anf error: ") + e.what());
+        return out_of_memory<Anf>("bdd_to_anf");
     }
 }
 

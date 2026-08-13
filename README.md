@@ -3,7 +3,7 @@
 Библиотека на C++ для трансляции между пятью представлениями булевых
 функций: **AIG** (mockturtle), **BDD** (Sylvan), **ANF** (полином
 Жегалкина, BRiAl), **Thr** (пороговые функции) и **TT** (таблица истинности,
-вспомогательный формат, n ≤ 24 — своей папки не имеет).
+вспомогательный формат, n ≤ 32 — своей папки не имеет).
 
 Инфраструктура (сборка, тесты, верификация, профилирование) уже готова.
 Студенты дописывают только тела 20 функций трансляции — сигнатуры,
@@ -148,6 +148,25 @@ FetchContent при первой сборке; CaDiCaL/kissat — только �
 `aig/`/`bdd/`/`anf/`/`thr/`, найдите свою секцию по имени функции и
 гоняйте только её, пока не увидите PASS.
 
+## 3а. Sanitizers (ASan/UBSan)
+
+Продолжение методологии, уже нашедшей реальную гонку в BRiAl через
+ThreadSanitizer (`aig/README.md` §1.3) — `-DBMM_SANITIZE=address,undefined`
+в `CMakeLists.txt` инструментирует сборку `-fsanitize=address,undefined`:
+
+```sh
+cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug -DBMM_SANITIZE=address,undefined
+cmake --build build-asan --parallel
+ctest --test-dir build-asan --output-on-failure
+```
+
+Пусто по умолчанию — обычная сборка (`cmake -S . -B build`, без флага) не
+теряет в скорости/памяти ради проверки, которую включают осознанно. Гоняется
+и в CI (`.github/workflows/ci.yml`, job `asan-ubsan`) — подтверждено живым
+прогоном (2026-08-11, см. `CHANGELOG.md`): ни одного срабатывания ASan/UBSan,
+несмотря на то, что CUDD/Sylvan/mockturtle/m4ri/BRiAl/OR-Tools сами собраны
+БЕЗ санитайзеров (см. комментарий у `BMM_SANITIZE` в `CMakeLists.txt`).
+
 ## 4. Прочитать STATUS.md
 
 ```sh
@@ -167,11 +186,30 @@ cmake --build build --target status
 этих размерах" тоже валидный результат. **Не редактируйте `STATUS.md`
 руками** — он перезаписывается при каждом запуске.
 
-**`.github/workflows/ci.yml` в репозитории пока нет** (см. `core/
-CONVENTIONS.md` п.8 за причиной и тем, что нужно, чтобы он появился) — текст
-ниже описывает, как CI ДОЛЖЕН вести себя, когда/если он будет настроен, не
-то, что реально запускается на каждый push/PR сейчас. Пока что делайте то
-же самое вручную: `cmake --build build --target status` локально/в
+**`.github/workflows/ci.yml` теперь есть** (см. `core/CONVENTIONS.md` п.8 за
+историей, почему его не было, и что именно закрывает текущая версия) — но
+это **лёгкий** CI, не полный: он собирает CUDD/Sylvan/mockturtle/m4ri/BRiAl/
+kissat/CaDiCaL/OR-Tools из исходников прямо на GitHub-hosted раннере
+(`scripts/install-deps.sh`, версии продублированы из `.devcontainer/Dockerfile`,
+кэшируются), а не переиспользует Docker-образ `genetica-boolean-lib` (тот
+по-прежнему нигде не опубликован — публикация в реестр остаётся отдельной,
+не сделанной задачей). Гоняет `test_aig`/`test_bdd`/`test_anf`/`test_thr`,
+`test_core`, `test_chains`, `test_full_matrix`, `test_large_n`,
+`test_real_datasets` и `status`-таргет; **исключает** только секции
+`*_tbb_scaling`/`*_openmp_scaling` (91% времени полного `ctest`, см.
+`TEST_TIMING_REPORT.md`, — это бенчмарки параллелизма, не проверка
+корректности). Скачивает EPFL-датасет (`benchmarks/scripts/
+download_epfl.sh`) — вопреки первоначальному плану "без скачанных
+датасетов", чтобы реально проверить EPFL-случаи `test_real_datasets`, а не
+полагаться на SKIP. Живой прогон (2026-08-11) сначала нашёл, что этот SKIP
+не работал (`verify/real_datasets_tests.cpp` роняло весь тест через
+`rep.bullet(false, ...)` вместо `rep.line("- SKIP ...")` — расхождение с
+собственным комментарием в `CMakeLists.txt`) — исправлено в коде теста (см.
+`CHANGELOG.md`), но датасет всё равно качаем: без него EPFL-случаи не
+проверяются вовсе, только пропускаются. Остальные датасеты (DIMACS/SATLIB/
+iis-nsk) и `large_scale_bench` — по-прежнему вне CI (не нужны остающимся
+таргетам / не зарегистрирован в `ctest`). Локально —
+делайте то же самое вручную: `cmake --build build --target status` в
 devcontainer. Exhaustive-проверки идут до `verify::kMaxGroundTruthVars`
 включительно (сверяйте актуальное значение в `verify/ground_truth/
 ground_truth.hpp` — не полагайтесь на конкретное число здесь) — для
@@ -191,6 +229,73 @@ FAIL — должен.
 в `aig/aig_to_bdd.hpp`) — защита от структурного взрыва BDD на реальных
 схемах с «неудачным» графом взаимодействия переменных, эмпирически
 подтверждена на EPFL `router.aig` (n=60, см. `SESSION_REPORT.md` §8).
+
+## 4а. Быстрый старт: как позвать функцию из СВОЕГО кода
+
+`test_<format>.cpp` — не лучший образец для этого: они собраны вокруг общей
+тестовой инфраструктуры (`verify::run_translation_tests<X,Y>`, единый
+`main()` на всех — `verify/test_main.cpp`), а не показывают прямой вызов.
+
+[`examples/`](examples/README.md) — два минимальных автономных файла без
+Catch2/`verify`: [`quickstart_non_bdd.cpp`](examples/quickstart_non_bdd.cpp)
+(вызов `tt_to_aig` напрямую из `main()`) и
+[`quickstart_bdd.cpp`](examples/quickstart_bdd.cpp) (то же самое для
+`tt_to_bdd` — но с обязательной инициализацией Sylvan/Lace, без которой
+любая работа с `Bdd` падает в SIGSEGV; `examples/README.md` объясняет,
+почему это нужно только для `Bdd` и почему там именно такое значение
+`deque_size`, а не дефолт Lace).
+
+## 4б. Подключение из внешнего проекта: find_package
+
+Библиотеку больше не нужно копировать внутрь своего дерева. После
+`cmake --build build --target install` (или `cmake --install build --prefix
+<путь>`) доступен обычный CMake-пакет:
+
+```cmake
+find_package(bmm-translib REQUIRED)
+target_link_libraries(my_app PRIVATE bmm::bmm_aig bmm::bmm_core)
+```
+
+```cpp
+#include <bmm/core/common.hpp>
+#include <bmm/aig/tt_to_aig.hpp>
+```
+
+Экспортируются `bmm::bmm_core` (интерфейс контракта) и по одному таргету на
+представление — `bmm::bmm_aig`/`bmm::bmm_bdd`/`bmm::bmm_anf`/`bmm::bmm_thr`
+(линкуйте только нужные). Заголовки ставятся под `<prefix>/include/bmm/
+<модуль>/` — тот же префикс `bmm/`, что и в `namespace bmm`, используется
+одинаково и внутри репозитория, и снаружи.
+
+**Честная оговорка** (подробнее — `cmake/bmm-translibConfig.cmake.in`):
+Sylvan/BRiAl/mockturtle не имеют собственного CMake-пакета в этом окружении
+— их абсолютные пути "запечены" в экспортируемые таргеты как есть, поэтому
+пакет не является универсально релокейтабл-пакетом в общем смысле CMake
+(vcpkg/Conan-порта ни для одной из трёх библиотек нет). TBB и Tracy
+устанавливаются вместе с bmm-translib (нужны при финальной линковке даже
+там, где сама библиотека линкует их `PRIVATE` — для статических библиотек
+это не освобождает потребителя от необходимости их предоставить);
+OpenMP/OR-Tools — реальные системные пакеты, потребитель находит их сам
+через свой `find_package`.
+
+**Портируемость на практике** — не через relocatable-пакет, а через
+воспроизводимую сборку зависимостей: [`scripts/install-deps.sh`](scripts/install-deps.sh)
+(тот же скрипт, что использует CI, см. §4 выше) строит тот же layout
+Sylvan/BRiAl/mockturtle/CUDD/m4ri/kissat/CaDiCaL/OR-Tools из исходников на
+любой Ubuntu 24.04-совместимой машине, без Docker-образа `genetica-
+boolean-lib` вообще:
+
+```sh
+BMM_DEPS_PREFIX=$HOME/bmm-deps ./scripts/install-deps.sh
+cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/bmm-deps \
+      -DMOCKTURTLE_ROOT=$HOME/bmm-deps/mockturtle
+```
+
+По умолчанию скрипт ставит в `/opt/bmm-deps` (удобно для CI/root-контейнеров
+вроде Coder-workspace, где `coder`-пользователь имеет `sudo`, см.
+`.devcontainer/Dockerfile`) — для локального запуска вне CI/devcontainer
+переопределите `BMM_DEPS_PREFIX` на путь в своём `$HOME`, как в примере
+выше, чтобы не понадобился root.
 
 ## 5. Контракт и конвенции
 

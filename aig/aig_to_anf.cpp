@@ -410,7 +410,7 @@ Result<Anf> aig_to_anf(const Aig& aig) {
       // BoolePolynomial/AnfFallback не ограничен заранее по построению
       // (в отличие от TruthTable-выходов), bad_alloc распространялся бы как
       // необработанное исключение через границу Result<T>.
-      return fail<Anf>(ErrorCode::OutOfMemory, "aig_to_anf: исчерпана память");
+      return out_of_memory<Anf>("aig_to_anf");
   }
 }
 

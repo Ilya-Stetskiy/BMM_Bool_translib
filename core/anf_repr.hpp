@@ -27,7 +27,7 @@
 
 #pragma once
 
-#include "core/common.hpp"
+#include <bmm/core/common.hpp>
 
 // BMM_FORCE_ANF_FALLBACK — тот же паттерн, что BMM_FORCE_VARIANT_FALLBACK у
 // Result<T> в core/common.hpp: форсирует AnfFallback-ветку даже если BRiAl

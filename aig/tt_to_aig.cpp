@@ -200,7 +200,7 @@ Result<Aig> tt_to_aig(const TruthTable& tt) {
       // build_aig_rec/mockturtle::aig_network распространялся бы как
       // необработанное исключение через границу Result<T>, в нарушение
       // CONVENTIONS.md п.2/2а.
-      return fail<Aig>(ErrorCode::OutOfMemory, "tt_to_aig: исчерпана память");
+      return out_of_memory<Aig>("tt_to_aig");
   }
 }
 

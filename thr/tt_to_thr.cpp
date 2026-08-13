@@ -168,9 +168,7 @@ Result<Thr> tt_to_thr(const TruthTable& tt) {
         }
 
     } catch (const std::bad_alloc&) {
-        return fail<Thr>(ErrorCode::OutOfMemory, "Not enough memory to build ILP constraints for the TruthTable");
-    } catch (const std::exception& e) {
-        return fail<Thr>(ErrorCode::Unsupported, e.what());
+        return out_of_memory<Thr>("tt_to_thr");
     }
 }
 

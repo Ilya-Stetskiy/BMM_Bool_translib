@@ -260,7 +260,18 @@ std::vector<Dataset> build_real_datasets(Report& rep) {
     for (const auto& c : epfl_cases) {
         auto aig = load_epfl_single_output(c.path, c.po);
         if (!aig) {
-            rep.bullet(false, "не удалось загрузить " + c.name + " (" + c.path + ")");
+            // SKIP, не FAIL: benchmarks/data/epfl — не обязательный к
+            // скачиванию датасет (см. README.md §7, benchmarks/scripts/
+            // download_epfl.sh), а не сломанный вход. Раньше здесь стоял
+            // rep.bullet(false, ...), который считается провалом
+            // (failed_checks++) и роняет весь test_real_datasets, даже
+            // когда единственная причина — отсутствующий локально файл, а
+            // не ошибка кода; это противоречило собственному комментарию в
+            // CMakeLists.txt про test_real_datasets ("если данных нет —
+            // EPFL-случаи SKIP, не FAIL всего теста") — расхождение нашёл
+            // живой прогон CI (CHANGELOG.md, 2026-08-12).
+            rep.line("- SKIP " + c.name + ": не удалось загрузить (" + c.path +
+                      ") — датасет не скачан, см. benchmarks/scripts/download_epfl.sh");
             continue;
         }
         rep.line("- загружено " + c.name + ": n_vars=" + std::to_string(aig->n_vars()) +

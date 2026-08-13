@@ -10,28 +10,28 @@
 
 #pragma once
 
-#include "core/anf_repr.hpp"
+#include <bmm/core/anf_repr.hpp>
 
-#include "aig/aig_to_bdd.hpp"
-#include "aig/aig_to_anf.hpp"
-#include "aig/aig_to_thr.hpp"
-#include "aig/aig_to_tt.hpp"
-#include "aig/tt_to_aig.hpp"
-#include "bdd/bdd_to_aig.hpp"
-#include "bdd/bdd_to_anf.hpp"
-#include "bdd/bdd_to_thr.hpp"
-#include "bdd/bdd_to_tt.hpp"
-#include "bdd/tt_to_bdd.hpp"
-#include "anf/anf_to_aig.hpp"
-#include "anf/anf_to_bdd.hpp"
-#include "anf/anf_to_thr.hpp"
-#include "anf/anf_to_tt.hpp"
-#include "anf/tt_to_anf.hpp"
-#include "thr/thr_to_aig.hpp"
-#include "thr/thr_to_bdd.hpp"
-#include "thr/thr_to_anf.hpp"
-#include "thr/thr_to_tt.hpp"
-#include "thr/tt_to_thr.hpp"
+#include <bmm/aig/aig_to_bdd.hpp>
+#include <bmm/aig/aig_to_anf.hpp>
+#include <bmm/aig/aig_to_thr.hpp>
+#include <bmm/aig/aig_to_tt.hpp>
+#include <bmm/aig/tt_to_aig.hpp>
+#include <bmm/bdd/bdd_to_aig.hpp>
+#include <bmm/bdd/bdd_to_anf.hpp>
+#include <bmm/bdd/bdd_to_thr.hpp>
+#include <bmm/bdd/bdd_to_tt.hpp>
+#include <bmm/bdd/tt_to_bdd.hpp>
+#include <bmm/anf/anf_to_aig.hpp>
+#include <bmm/anf/anf_to_bdd.hpp>
+#include <bmm/anf/anf_to_thr.hpp>
+#include <bmm/anf/anf_to_tt.hpp>
+#include <bmm/anf/tt_to_anf.hpp>
+#include <bmm/thr/thr_to_aig.hpp>
+#include <bmm/thr/thr_to_bdd.hpp>
+#include <bmm/thr/thr_to_anf.hpp>
+#include <bmm/thr/thr_to_tt.hpp>
+#include <bmm/thr/tt_to_thr.hpp>
 
 #include <chrono>
 #include <cstdio>

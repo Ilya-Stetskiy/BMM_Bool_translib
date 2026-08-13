@@ -1,4 +1,4 @@
-#include "thr/thr_to_aig.hpp"
+#include <bmm/thr/thr_to_aig.hpp>
 
 #include <mockturtle/networks/aig.hpp>
 
@@ -243,7 +243,7 @@ Result<Aig> thr_to_aig(const Thr& thr) {
         return ok<Aig>(Aig{ntk});
     } 
     catch (const std::bad_alloc&) {
-        return fail<Aig>(ErrorCode::OutOfMemory, "Memory exhausted during adder-tree AIG construction");
+        return out_of_memory<Aig>("thr_to_aig");
     }
 }
 

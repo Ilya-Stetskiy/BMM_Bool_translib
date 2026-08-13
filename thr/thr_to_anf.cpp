@@ -28,7 +28,9 @@ Result<Anf> thr_to_anf(const Thr& thr) {
 
         // Защита от исчерпания памяти при построении плоского массива (согласно контракту)
         if (n > kMaxTruthTableVars) {
-            return fail<Anf>(ErrorCode::OutOfMemory, "thr_to_anf: n > 24 exceeds flat array memory limits");
+            return fail<Anf>(ErrorCode::OutOfMemory,
+                              "thr_to_anf: n > " + std::to_string(kMaxTruthTableVars) +
+                                  " exceeds flat array memory limits");
         }
 
         uint64_t size = 1ull << n;
@@ -134,9 +136,7 @@ Result<Anf> thr_to_anf(const Thr& thr) {
         return ok(Anf(std::move(p), n));
 #endif
     } catch (const std::bad_alloc&) {
-        return fail<Anf>(ErrorCode::OutOfMemory, "thr_to_anf: исчерпана память");
-    } catch (const std::exception& e) {
-        return fail<Anf>(ErrorCode::InvalidArgument, e.what());
+        return out_of_memory<Anf>("thr_to_anf");
     }
 }
 

@@ -6,11 +6,11 @@
 
 #include <iostream>
 
-#include "anf/anf_to_aig.hpp"
-#include "anf/anf_to_bdd.hpp"
-#include "anf/anf_to_thr.hpp"
-#include "anf/anf_to_tt.hpp"
-#include "anf/tt_to_anf.hpp"
+#include <bmm/anf/anf_to_aig.hpp>
+#include <bmm/anf/anf_to_bdd.hpp>
+#include <bmm/anf/anf_to_thr.hpp>
+#include <bmm/anf/anf_to_tt.hpp>
+#include <bmm/anf/tt_to_anf.hpp>
 #include "benchmarks/openmp_scaling.hpp"
 #include "benchmarks/tbb_scaling.hpp"
 #include "verify/reference_builders.hpp"

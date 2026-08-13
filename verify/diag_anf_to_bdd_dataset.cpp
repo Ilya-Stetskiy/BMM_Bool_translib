@@ -8,7 +8,7 @@
 // ~65 из 100 — граф взаимодействия переменных близок к ПОЛНОМУ K_100, у
 // FORCE физически нет структуры, которую можно было бы эксплуатировать).
 
-#include "anf/anf_to_bdd.hpp"
+#include <bmm/anf/anf_to_bdd.hpp>
 #include "benchmarks/anf_dimacs_loader.hpp"
 
 #include <sylvan_obj.hpp>

@@ -31,7 +31,7 @@
 #include <string>
 #include <type_traits>
 
-#include "core/common.hpp"
+#include <bmm/core/common.hpp>
 #include "verify/ground_truth/ground_truth.hpp"
 #include "verify/metamorphic/metamorphic.hpp"
 #include "verify/sat_encoding/sat_encoding.hpp"

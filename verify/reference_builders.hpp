@@ -23,7 +23,7 @@
 
 #include <vector>
 
-#include "core/anf_repr.hpp"
+#include <bmm/core/anf_repr.hpp>
 #include "verify/ground_truth/ground_truth.hpp"
 
 namespace bmm::verify {

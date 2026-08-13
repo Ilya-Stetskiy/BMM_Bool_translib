@@ -5,7 +5,7 @@
 
 #include <cstdio>
 
-#include "core/anf_repr.hpp"
+#include <bmm/core/anf_repr.hpp>
 
 int main() {
     std::printf("BMM_INFO result_backend %s\n",

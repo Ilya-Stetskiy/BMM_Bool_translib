@@ -43,7 +43,7 @@ void check_one(const std::string& path) {
 
     AnyRepr anf_repr = AnyRepr(*anf);
 
-    // anf_to_tt: ожидаемый отказ (n=100 >> kMaxTruthTableVars=24).
+    // anf_to_tt: ожидаемый отказ (n=100 >> kMaxTruthTableVars).
     {
         auto r = anf_to_tt(*anf);
         if (is_ok(r)) {

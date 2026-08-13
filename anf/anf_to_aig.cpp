@@ -190,6 +190,11 @@ Result<Aig> anf_to_aig(const Anf& anf)
 {
     ZoneScoped;
 
+  // ДОБАВЛЕНО (унификация с обратной aig_to_anf, см. CONVENTIONS.md п.2а):
+  // размер строящегося AIG пропорционален числу мономов ANF, которое не
+  // ограничено n_vars() — тот же класс риска, что и у aig_to_anf, только
+  // в обратную сторону.
+  try {
 
     mockturtle::aig_network aig;
 
@@ -272,6 +277,10 @@ Result<Aig> anf_to_aig(const Anf& anf)
     return ok<Aig>(
         Aig(std::move(aig))
     );
+
+  } catch (const std::bad_alloc&) {
+      return out_of_memory<Aig>("anf_to_aig");
+  }
 }
 
 

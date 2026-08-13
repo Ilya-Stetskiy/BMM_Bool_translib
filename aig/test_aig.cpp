@@ -10,11 +10,11 @@
 
 #include <iostream>
 
-#include "aig/aig_to_anf.hpp"
-#include "aig/aig_to_bdd.hpp"
-#include "aig/aig_to_thr.hpp"
-#include "aig/aig_to_tt.hpp"
-#include "aig/tt_to_aig.hpp"
+#include <bmm/aig/aig_to_anf.hpp>
+#include <bmm/aig/aig_to_bdd.hpp>
+#include <bmm/aig/aig_to_thr.hpp>
+#include <bmm/aig/aig_to_tt.hpp>
+#include <bmm/aig/tt_to_aig.hpp>
 #include "benchmarks/tbb_scaling.hpp"
 #include "verify/reference_builders.hpp"
 #include "verify/test_runner.hpp"
