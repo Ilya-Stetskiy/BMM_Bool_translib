@@ -167,6 +167,32 @@ ctest --test-dir build-asan --output-on-failure
 несмотря на то, что CUDD/Sylvan/mockturtle/m4ri/BRiAl/OR-Tools сами собраны
 БЕЗ санитайзеров (см. комментарий у `BMM_SANITIZE` в `CMakeLists.txt`).
 
+## 3б. Fuzzing собственных парсеров (`fuzz/`)
+
+Два libFuzzer-харнесса — по одному на каждый парсер untrusted-формата,
+который проект пишет и поддерживает сам (`benchmarks/cnf_dimacs_loader.hpp`,
+`benchmarks/anf_dimacs_loader.hpp`; `benchmarks/dddmp_loader.hpp` намеренно
+не фаззится — в основном проксирует парсер CUDD, не код проекта). Найдена
+и исправлена одной строкой на файл реальная уязвимость: `n_vars`/
+`n_clauses`/`n_monomials` из заголовка файла использовались в `reserve()`
+без верхней границы — специально сконструированный файл вызывал DoS/OOM
+одной строкой заголовка (`kMaxReasonableCnfVars`/`kMaxReasonableAnfVars` в
+самих загрузчиках — фикс).
+
+```sh
+cmake -S . -B build-fuzz -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+      -DBMM_BUILD_FUZZERS=ON
+cmake --build build-fuzz --target fuzz_cnf_dimacs_loader fuzz_anf_dimacs_loader
+./build-fuzz/fuzz_cnf_dimacs_loader fuzz/corpus/cnf
+```
+
+Требует Clang (`-fsanitize=fuzzer` — не GCC-флаг), поэтому `BMM_BUILD_FUZZERS`
+по умолчанию `OFF` и не влияет на обычную сборку. В CI (job `fuzz-smoke`) —
+только короткий smoke-прогон (`-max_total_time=60`, ловит "харнесс вообще
+собирается и не падает на своём корпусе"), не полноценная фаззинг-кампания
+— для реального поиска багов запускать вручную часами/сутками, см.
+[`fuzz/README.md`](fuzz/README.md).
+
 ## 4. Прочитать STATUS.md
 
 ```sh
@@ -296,6 +322,13 @@ cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/bmm-deps \
 `.devcontainer/Dockerfile`) — для локального запуска вне CI/devcontainer
 переопределите `BMM_DEPS_PREFIX` на путь в своём `$HOME`, как в примере
 выше, чтобы не понадобился root.
+
+**`find_package` живьём проверен** — [`examples/external_consumer/`](examples/external_consumer)
+это отдельный CMake-проект (не таргет в этом же `build/` дереве, как
+`examples/quickstart_*.cpp`), собираемый в CI (`build-and-test`) против
+установленной через `cmake --install` копии библиотеки. Раньше `install()`/
+`export()` были готовы, но живьём через `find_package` из ДРУГОГО
+CMake-проекта не проверялись ни разу.
 
 ## 5. Контракт и конвенции
 

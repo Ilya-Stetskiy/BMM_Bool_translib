@@ -8,7 +8,39 @@
 
 ## [Unreleased]
 
+### Added
+- `examples/external_consumer/` — отдельный CMake-проект (не таргет в этом
+  же `build/` дереве, как `examples/quickstart_*.cpp`), доказывающий, что
+  `find_package(bmm-translib REQUIRED)` реально работает на установленной
+  (`cmake --install`) копии библиотеки. `install()`/`export()` существуют
+  с прошлой сессии, но живьём через `find_package` из другого CMake-
+  проекта не проверялись НИ РАЗУ до этого — теперь гоняется в CI
+  (`build-and-test`, шаги после `STATUS.md`).
+- `fuzz/` — libFuzzer-харнессы для собственных парсеров untrusted-форматов
+  (`fuzz_cnf_dimacs_loader`, `fuzz_anf_dimacs_loader`; `benchmarks/
+  dddmp_loader.hpp` намеренно не фаззится — в основном проксирует парсер
+  CUDD, не код проекта). `BMM_BUILD_FUZZERS` (по умолчанию `OFF`, требует
+  Clang — `-fsanitize=fuzzer` не GCC-флаг). CI (job `fuzz-smoke`) гоняет
+  только короткий smoke-прогон (`-max_total_time=60`), не полноценную
+  кампанию — см. `fuzz/README.md`.
+
 ### Changed
+- `aig/aig_to_tt.cpp`: `kBlockVars` 6 → 10 — закрывает TODO из
+  `TRANSLATION_MATRIX.md` про allocation-free подход + широкий блок,
+  раньше не измерявшиеся вместе. Реальный замер (`verify/
+  diag_aig_to_tt_k10.cpp`, временный, удалён после записи чисел) показал
+  K=10 быстрее K=6 в 1.5-2.5x на n=16/20/24 (только на n=12, <0.01мс,
+  доминирует шум CI-раннера); cross-check K6==K10 — PASS на всех размерах,
+  подтверждено полным `ctest` + ASan/UBSan.
+- `TRANSLATION_MATRIX.md`/`aig/README.md`/`anf/README.md`/`bdd/README.md`/
+  `thr/README.md`/`core/CONVENTIONS.md`: закрыт `kMaxTruthTableVars=24`
+  staleness — все писались ДО подъёма лимита до 32 (см. запись ниже про
+  `bd39682`). Статус верификации n=13…32 явно зафиксирован для
+  `tt_to_bdd`/`thr_to_tt`/`tt_to_thr`/`bdd_to_tt` (только метаморфные
+  проверки, не exhaustive) и n=20…32 для `anf_to_tt`/`tt_to_anf`
+  (`verify/large_n_tests.cpp`). Заодно найден и исправлен мелкий хвост:
+  `thr/tt_to_thr.cpp` имел свой хардкод `n>=32`, раньше "с запасом" над
+  старым лимитом 24, теперь ровно совпадает с новым 32.
 - `ci/install-deps.sh` → `scripts/install-deps.sh` — переименован и
   переописан как общий bootstrap-скрипт зависимостей (CUDD/Sylvan/
   mockturtle/m4ri/BRiAl/kissat/CaDiCaL/OR-Tools), не только для CI: строит
@@ -22,6 +54,14 @@
   `cmake/bmm-translibConfig.cmake.in`/`core/CONVENTIONS.md` обновлены.
 
 ### Fixed
+- `benchmarks/cnf_dimacs_loader.hpp`/`anf_dimacs_loader.hpp`:
+  `n_vars`/`n_clauses`/`n_monomials` из заголовка файла использовались в
+  `reserve()` без верхней границы — специально сконструированный файл
+  (`p cnf 4000000000 4000000000`) вызывал DoS/OOM одной строкой заголовка,
+  до какого-либо перебора реальных строк. Найдено при аудите (см. ниже,
+  `[0.1.0]` "Топ-5"), формально подтверждено фаззингом (`fuzz/`, см. Added
+  выше). Фикс — `kMaxReasonableCnfVars`/`kMaxReasonableAnfVars` (100 млн,
+  с большим запасом выше реальных датасетов проекта).
 - `verify/real_datasets_tests.cpp`: отсутствие `benchmarks/data/epfl`
   (недокачанный датасет) роняло весь `test_real_datasets` через
   `rep.bullet(false, ...)` (учитывается в `failed_checks`) вместо
@@ -30,6 +70,19 @@
   нет — EPFL-случаи SKIP, не FAIL всего теста"), найденное живым прогоном
   CI (см. запись `[0.1.0]` ниже, "Verified" п.1). Однострочный фикс: теперь
   реально SKIP.
+
+### Verified
+
+- **Пункты выше подтверждены живым прогоном** на GitHub Actions (2026-08-13,
+  PR #6, run 31674727813) — все три job'а зелёные: `build-and-test`
+  (11m23s, включая `find_package`/`external_consumer` — `AND3 корректно
+  построен и оценён`), `asan-ubsan` (34m13s), `fuzz-smoke` (3m17s, оба
+  харнесса реально исследовали покрытие — `fuzz_anf_dimacs_loader`: 74731
+  запуск за 61с, cov: 167, 0 крэшей на стартовом корпусе). По дороге одна
+  находка: `find_package(OpenMP REQUIRED)` (безусловный, нужен `thr/*`)
+  падал под Clang в `fuzz-smoke` — GCC получает OpenMP через `libgomp`
+  (часть пакета `gcc`), Clang `-fopenmp` требует отдельный `libomp-dev`,
+  не входивший в apt-список этого job'а. Исправлено.
 
 ## [0.1.0] - 2026-08-11
 

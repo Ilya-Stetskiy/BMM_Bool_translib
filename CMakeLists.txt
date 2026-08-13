@@ -573,6 +573,38 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# fuzz/ — libFuzzer-харнессы для собственных парсеров untrusted-форматов
+# (DIMACS CNF/ANF; benchmarks/dddmp_loader.hpp намеренно НЕ фаззится —
+# в основном проксирует парсер CUDD, не код проекта). Выключено по
+# умолчанию по двум причинам: -fsanitize=fuzzer — флаг только Clang (GCC не
+# поддерживает), а обычной сборке (GCC, без фаззинга) эти таргеты не нужны
+# вообще. Пример конфигурации — fuzz/README.md.
+# ---------------------------------------------------------------------------
+
+option(BMM_BUILD_FUZZERS "Собрать libFuzzer-харнессы для DIMACS-загрузчиков (требует Clang)" OFF)
+if(BMM_BUILD_FUZZERS)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "BMM_BUILD_FUZZERS=ON требует Clang (-fsanitize=fuzzer) — "
+                             "текущий компилятор: ${CMAKE_CXX_COMPILER_ID}. "
+                             "Переконфигурируйте с -DCMAKE_CXX_COMPILER=clang++.")
+    endif()
+
+    function(bmm_add_fuzzer target_name source_file)
+        add_executable(${target_name} ${source_file})
+        target_link_libraries(${target_name} PRIVATE bmm_core)
+        # ASan+UBSan в самом харнессе всегда, независимо от BMM_SANITIZE —
+        # без них фаззинг ловит только "процесс не упал", не переполнения/UB
+        # (собственно то, ради чего эта проверка существует).
+        target_compile_options(${target_name} PRIVATE -fsanitize=fuzzer,address,undefined
+                                                        -fno-sanitize-recover=all)
+        target_link_options(${target_name} PRIVATE -fsanitize=fuzzer,address,undefined)
+    endfunction()
+
+    bmm_add_fuzzer(fuzz_cnf_dimacs_loader fuzz/fuzz_cnf_dimacs_loader.cpp)
+    bmm_add_fuzzer(fuzz_anf_dimacs_loader fuzz/fuzz_anf_dimacs_loader.cpp)
+endif()
+
+# ---------------------------------------------------------------------------
 # install()/export() — find_package(bmm-translib) со стороны внешнего
 # проекта. Раньше подключить библиотеку можно было, только скопировав
 # исходники внутрь своего дерева и вручную повторив список файлов/линковок

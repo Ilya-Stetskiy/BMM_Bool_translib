@@ -164,6 +164,27 @@ jobs:
           name: STATUS.md
           path: STATUS.md
 
+      # ---------------------------------------------------------------------
+      # find_package(bmm-translib) с ЧИСТОГО листа — единственное место в
+      # репозитории, где этот путь реально проверяется живой сборкой (не
+      # examples/quickstart_*.cpp — те собираются в этом же build/ дереве,
+      # find_package() ни разу не вызывают, см. examples/external_consumer/
+      # CMakeLists.txt за полным объяснением разницы). install() экспорт
+      # существует с прошлой сессии, но живьём через find_package из ДРУГОГО
+      # CMake-проекта раньше не гонялся ни разу.
+      # ---------------------------------------------------------------------
+      - name: install() bmm-translib в отдельный префикс
+        run: cmake --install build --prefix "${{ runner.temp }}/bmm-install"
+
+      - name: Собрать examples/external_consumer через find_package
+        run: |
+          cmake -S examples/external_consumer -B build-consumer \
+            -DCMAKE_PREFIX_PATH="${{ runner.temp }}/bmm-install;${BMM_DEPS_PREFIX}"
+          cmake --build build-consumer
+
+      - name: Запустить bmm_external_consumer
+        run: ./build-consumer/bmm_external_consumer
+
       # Save — ПОСЛЕДними, if: always(), после ctest/build. См. комментарий в
       # шапке файла: единый actions/cache@v4 сохранял бы кэш только при
       # успехе всего job'а, теряя уже собранные (за ~30-40 минут) зависимости
@@ -278,3 +299,80 @@ jobs:
         with:
           path: benchmarks/data/epfl
           key: bmm-epfl-dataset-v1
+
+  # ---------------------------------------------------------------------------
+  # fuzz-smoke — собирает fuzz/*.cpp (BMM_BUILD_FUZZERS=ON, требует Clang —
+  # -fsanitize=fuzzer не поддерживается GCC, отсюда отдельный job, не шаг в
+  # build-and-test/asan-ubsan) и гоняет каждый харнесс короткое
+  # `-max_total_time`, не полноценную фаззинг-кампанию (см. fuzz/README.md
+  # за тем, как запускать долгие прогоны вручную). Цель здесь — убедиться,
+  # что харнессы собираются и не падают сразу на своём же seed-корпусе, а
+  # не найти новые баги (для этого нужны часы/сутки, не минута в CI).
+  #
+  # Переиспользует тот же кэш зависимостей, что и два job'а выше (общий
+  # ключ) — деп-либы собраны GCC/без Clang-специфичных флагов, но это не
+  # проблема: сами харнессы (fuzz/*.cpp) — единственное, что реально
+  # компилируется Clang с -fsanitize=fuzzer, а линкуют они только bmm_core
+  # (INTERFACE, header-only + флаги линковки Sylvan/Threads — не отдельная
+  # собранная библиотека), не GCC-собранные bmm_aig/bmm_anf/итд. EPFL-
+  # датасет не нужен — харнессы фаззят парсинг DIMACS, не EPFL AIG.
+  # ---------------------------------------------------------------------------
+  fuzz-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Установить системные пакеты (apt, + clang/libomp-dev)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential gcc g++ clang libomp-dev cmake ninja-build \
+            autoconf automake libtool m4 pkg-config \
+            libboost-all-dev libgmp-dev libm4ri-dev libm4rie-dev \
+            zlib1g-dev libssl-dev libtbb-dev unzip
+
+      - name: Restore кэш собранных зависимостей (общий с build-and-test — тот же ключ)
+        id: cache-deps
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.BMM_DEPS_PREFIX }}
+          key: bmm-deps-${{ runner.os }}-${{ hashFiles('scripts/install-deps.sh') }}
+
+      - name: Собрать зависимости из исходников (только при cache miss)
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          chmod +x scripts/install-deps.sh
+          ./scripts/install-deps.sh
+
+      - name: Прокинуть пути к зависимостям в окружение
+        run: |
+          echo "${BMM_DEPS_PREFIX}/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=${BMM_DEPS_PREFIX}/lib:${BMM_DEPS_PREFIX}/lib64:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=${BMM_DEPS_PREFIX}" >> "$GITHUB_ENV"
+
+      - name: Configure (Clang + BMM_BUILD_FUZZERS)
+        run: |
+          cmake -S . -B build-fuzz \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DBMM_BUILD_FUZZERS=ON \
+            -DCMAKE_PREFIX_PATH="${BMM_DEPS_PREFIX}" \
+            -DMOCKTURTLE_ROOT="${BMM_DEPS_PREFIX}/mockturtle"
+
+      - name: Build (только fuzz-таргеты)
+        run: cmake --build build-fuzz --target fuzz_cnf_dimacs_loader fuzz_anf_dimacs_loader --parallel
+
+      - name: Smoke-прогон fuzz_cnf_dimacs_loader (60с)
+        run: ./build-fuzz/fuzz_cnf_dimacs_loader fuzz/corpus/cnf -max_total_time=60
+
+      - name: Smoke-прогон fuzz_anf_dimacs_loader (60с)
+        run: ./build-fuzz/fuzz_anf_dimacs_loader fuzz/corpus/anf -max_total_time=60
+
+      - name: Save кэш зависимостей (если был cache miss)
+        if: always() && steps.cache-deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.BMM_DEPS_PREFIX }}
+          key: bmm-deps-${{ runner.os }}-${{ hashFiles('scripts/install-deps.sh') }}
