@@ -149,13 +149,6 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
 
-      # ВРЕМЕННЫЙ шаг этой сессии — см. verify/diag_aig_to_tt_k10.cpp/
-      # CMakeLists.txt за контекстом (закрывает TODO из TRANSLATION_MATRIX.md
-      # про K=10+allocation-free aig_to_tt). Удаляется вместе с диагностикой
-      # после того как числа записаны в aig/README.md.
-      - name: "[diag] aig_to_tt K=6 vs K=10"
-        run: ./build/diag_aig_to_tt_k10
-
       - name: ctest (без TBB/OpenMP scaling-бенчмарков — см. шапку файла)
         run: |
           ctest --test-dir build --output-on-failure \

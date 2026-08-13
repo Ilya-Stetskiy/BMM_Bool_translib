@@ -525,14 +525,6 @@ target_link_libraries(diag_boundary_timing PRIVATE bmm_aig bmm_bdd bmm_anf bmm_t
 add_executable(diag_anf_to_bdd_dataset verify/diag_anf_to_bdd_dataset.cpp)
 target_link_libraries(diag_anf_to_bdd_dataset PRIVATE bmm_anf bmm_bdd bmm_core TBB::tbb)
 
-# ВРЕМЕННЫЙ таргет этой сессии — закрывает открытый вопрос из
-# TRANSLATION_MATRIX.md/aig/README.md §1.5: combination allocation-free +
-# widening (K=10) для aig_to_tt, не тестировалось вместе. Не таргет ctest,
-# удаляется вместе с verify/diag_aig_to_tt_k10.cpp после того как числа
-# записаны в aig/README.md/TRANSLATION_MATRIX.md.
-add_executable(diag_aig_to_tt_k10 verify/diag_aig_to_tt_k10.cpp)
-target_link_libraries(diag_aig_to_tt_k10 PRIVATE bmm_aig bmm_core OpenMP::OpenMP_CXX)
-
 # Офлайн-генератор bdd/chow_database_generated.inc (см. bdd/chow_detail.hpp,
 # bdd/README.md §5.4а) — перебор весов + исчерпывающий перебор всех
 # монотонных функций K<=6 переменных со сверкой каждого расхождения против
