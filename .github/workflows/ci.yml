@@ -164,6 +164,27 @@ jobs:
           name: STATUS.md
           path: STATUS.md
 
+      # ---------------------------------------------------------------------
+      # find_package(bmm-translib) с ЧИСТОГО листа — единственное место в
+      # репозитории, где этот путь реально проверяется живой сборкой (не
+      # examples/quickstart_*.cpp — те собираются в этом же build/ дереве,
+      # find_package() ни разу не вызывают, см. examples/external_consumer/
+      # CMakeLists.txt за полным объяснением разницы). install() экспорт
+      # существует с прошлой сессии, но живьём через find_package из ДРУГОГО
+      # CMake-проекта раньше не гонялся ни разу.
+      # ---------------------------------------------------------------------
+      - name: install() bmm-translib в отдельный префикс
+        run: cmake --install build --prefix "${{ runner.temp }}/bmm-install"
+
+      - name: Собрать examples/external_consumer через find_package
+        run: |
+          cmake -S examples/external_consumer -B build-consumer \
+            -DCMAKE_PREFIX_PATH="${{ runner.temp }}/bmm-install;${BMM_DEPS_PREFIX}"
+          cmake --build build-consumer
+
+      - name: Запустить bmm_external_consumer
+        run: ./build-consumer/bmm_external_consumer
+
       # Save — ПОСЛЕДними, if: always(), после ctest/build. См. комментарий в
       # шапке файла: единый actions/cache@v4 сохранял бы кэш только при
       # успехе всего job'а, теряя уже собранные (за ~30-40 минут) зависимости

@@ -323,6 +323,13 @@ cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/bmm-deps \
 переопределите `BMM_DEPS_PREFIX` на путь в своём `$HOME`, как в примере
 выше, чтобы не понадобился root.
 
+**`find_package` живьём проверен** — [`examples/external_consumer/`](examples/external_consumer)
+это отдельный CMake-проект (не таргет в этом же `build/` дереве, как
+`examples/quickstart_*.cpp`), собираемый в CI (`build-and-test`) против
+установленной через `cmake --install` копии библиотеки. Раньше `install()`/
+`export()` были готовы, но живьём через `find_package` из ДРУГОГО
+CMake-проекта не проверялись ни разу.
+
 ## 5. Контракт и конвенции
 
 Прежде чем писать тело функции — прочитайте

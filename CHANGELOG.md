@@ -9,6 +9,13 @@
 ## [Unreleased]
 
 ### Added
+- `examples/external_consumer/` — отдельный CMake-проект (не таргет в этом
+  же `build/` дереве, как `examples/quickstart_*.cpp`), доказывающий, что
+  `find_package(bmm-translib REQUIRED)` реально работает на установленной
+  (`cmake --install`) копии библиотеки. `install()`/`export()` существуют
+  с прошлой сессии, но живьём через `find_package` из другого CMake-
+  проекта не проверялись НИ РАЗУ до этого — теперь гоняется в CI
+  (`build-and-test`, шаги после `STATUS.md`).
 - `fuzz/` — libFuzzer-харнессы для собственных парсеров untrusted-форматов
   (`fuzz_cnf_dimacs_loader`, `fuzz_anf_dimacs_loader`; `benchmarks/
   dddmp_loader.hpp` намеренно не фаззится — в основном проксирует парсер
