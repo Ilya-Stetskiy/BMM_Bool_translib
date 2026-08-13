@@ -34,6 +34,13 @@
 
 namespace bmm::benchmarks {
 
+// См. kMaxReasonableCnfVars в benchmarks/cnf_dimacs_loader.hpp — тот же
+// класс находки (специально сконструированный заголовок вызывает
+// неограниченную аллокацию `monomials.reserve(n_monoms_declared)` до
+// какого-либо перебора реальных строк), тот же ответ. Реальный корпус
+// проекта — persons.iis.nsk.su, n=100, до 10000 мономов, на порядки ниже.
+inline constexpr uint32_t kMaxReasonableAnfVars = 100'000'000;
+
 inline std::optional<Anf> load_anf_dimacs(const std::string& path) {
     std::ifstream in(path);
     if (!in) return std::nullopt;
@@ -53,6 +60,9 @@ inline std::optional<Anf> load_anf_dimacs(const std::string& path) {
             std::string tag, fmt;
             iss >> tag >> fmt >> n_vars >> n_monoms_declared;
             if (!iss || tag != "p" || fmt != "anf") return std::nullopt;
+            if (n_vars > kMaxReasonableAnfVars || n_monoms_declared > kMaxReasonableAnfVars) {
+                return std::nullopt;
+            }
             have_header = true;
             monomials.reserve(n_monoms_declared);
             continue;

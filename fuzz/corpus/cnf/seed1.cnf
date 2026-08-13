@@ -1,0 +1,4 @@
+c minimal seed — 3 vars, 2 clauses
+p cnf 3 2
+1 -2 0
+2 3 0

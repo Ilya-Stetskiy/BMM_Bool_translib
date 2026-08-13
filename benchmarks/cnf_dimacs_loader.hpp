@@ -43,6 +43,17 @@
 
 namespace bmm::benchmarks {
 
+// Верхняя граница на n_vars/n_clauses из ЗАГОЛОВКА файла — до какого-либо
+// перебора реальных строк. Без неё специально сконструированный файл
+// ("p cnf 4000000000 4000000000") вызывает эталонную неограниченную
+// аллокацию (`clauses.reserve(n_clauses_declared)` здесь и
+// `pis(cnf.num_vars)` в cnf_to_aig ниже) по одной строке заголовка — DoS/
+// OOM, найдено фаззингом (fuzz/fuzz_cnf_dimacs_loader.cpp) и живым CI-
+// прогоном лёгкого CI (см. CHANGELOG.md). 100 млн — с большим запасом выше
+// реальных датасетов проекта (SATLIB — до ~50 тыс. инстансов, каждый на
+// порядки меньше по n_vars), но отсекает адверсариальные значения.
+inline constexpr uint32_t kMaxReasonableCnfVars = 100'000'000;
+
 inline std::optional<verify::CnfFormula> load_cnf_dimacs(const std::string& path) {
     std::ifstream in(path);
     if (!in) return std::nullopt;
@@ -61,6 +72,9 @@ inline std::optional<verify::CnfFormula> load_cnf_dimacs(const std::string& path
             std::string tag, fmt;
             iss >> tag >> fmt >> cnf.num_vars >> n_clauses_declared;
             if (!iss || tag != "p" || fmt != "cnf") return std::nullopt;
+            if (cnf.num_vars > kMaxReasonableCnfVars || n_clauses_declared > kMaxReasonableCnfVars) {
+                return std::nullopt;
+            }
             have_header = true;
             cnf.clauses.reserve(n_clauses_declared);
             continue;
