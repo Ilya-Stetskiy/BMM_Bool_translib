@@ -325,11 +325,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Установить системные пакеты (apt, + clang)
+      - name: Установить системные пакеты (apt, + clang/libomp-dev)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential gcc g++ clang cmake ninja-build \
+            build-essential gcc g++ clang libomp-dev cmake ninja-build \
             autoconf automake libtool m4 pkg-config \
             libboost-all-dev libgmp-dev libm4ri-dev libm4rie-dev \
             zlib1g-dev libssl-dev libtbb-dev unzip
