@@ -47,6 +47,25 @@ namespace bmm::benchmarks {
 // дополнительно ограничен фактическим размером файла.
 inline constexpr uint32_t kMaxReasonableAnfVars = 100'000'000;
 
+// Отдельный, СИЛЬНО более строгий лимит именно для BRiAl-пути (ниже,
+// `#if BMM_HAVE_BRIAL`): конструктор `polybori::BoolePolyRing(n)` сам стоит
+// ~4.2КБ RAM на переменную ВНЕ ЗАВИСИМОСТИ от числа реальных мономов в
+// файле — измерено эмпирически (n=100000 -> ~470МБ, n=1000000 -> ~4.2ГБ за
+// один malloc, n=3000000 сегфолтится внутри libbrial). Найдено
+// многочасовым фаззинг-прогоном: входной файл `"p anf 2999999 8\n1 2 1 2"`
+// (23 байта, 8 мономов) обрушивает процесс в OOM. `kMaxReasonableAnfVars`
+// выше (100 млн) для этой конкретной операции недостаточен — он ограничивал
+// класс находок вида "аллокация ~ заявленное количество", а тут аллокация
+// пропорциональна n_vars уже при КОНСТРУИРОВАНИИ кольца, до какого-либо
+// использования мономов. `AnfFallback` (BMM_HAVE_BRIAL=0) от n_vars по
+// стоимости не зависит (std::set, растёт только с реальными мономами) —
+// этот лимит его не касается. 50000*4.2КБ ~ 210МБ — с запасом (500x) выше
+// реального корпуса проекта (n~100), но ограничивает злонамеренный
+// заголовок разумной величиной.
+#if BMM_HAVE_BRIAL
+inline constexpr uint32_t kMaxReasonableAnfRingVars = 50'000;
+#endif
+
 inline std::optional<Anf> load_anf_dimacs(const std::string& path) {
     std::ifstream in(path);
     if (!in) return std::nullopt;
@@ -73,6 +92,9 @@ inline std::optional<Anf> load_anf_dimacs(const std::string& path) {
             if (n_vars > kMaxReasonableAnfVars || n_monoms_declared > kMaxReasonableAnfVars) {
                 return std::nullopt;
             }
+#if BMM_HAVE_BRIAL
+            if (n_vars > kMaxReasonableAnfRingVars) return std::nullopt;
+#endif
             have_header = true;
             monomials.reserve(std::min<uint64_t>(n_monoms_declared, reserve_cap));
             continue;
