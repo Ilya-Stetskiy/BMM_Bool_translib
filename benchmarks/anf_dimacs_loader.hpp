@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <optional>
 #include <sstream>
@@ -39,11 +40,20 @@ namespace bmm::benchmarks {
 // неограниченную аллокацию `monomials.reserve(n_monoms_declared)` до
 // какого-либо перебора реальных строк), тот же ответ. Реальный корпус
 // проекта — persons.iis.nsk.su, n=100, до 10000 мономов, на порядки ниже.
+//
+// Тот же догоняющий фикс, что и в cnf_dimacs_loader.hpp: sizeof(std::vector
+// <uint32_t>) == 24 байта, n_monoms_declared у границы этого лимита всё
+// ещё даёт reserve() на ~2.4 ГБ из короткого заголовка — reserve() ниже
+// дополнительно ограничен фактическим размером файла.
 inline constexpr uint32_t kMaxReasonableAnfVars = 100'000'000;
 
 inline std::optional<Anf> load_anf_dimacs(const std::string& path) {
     std::ifstream in(path);
     if (!in) return std::nullopt;
+
+    std::error_code fs_ec;
+    const uint64_t file_size = std::filesystem::file_size(path, fs_ec);
+    const uint64_t reserve_cap = fs_ec ? 0 : file_size;
 
     uint32_t n_vars = 0;
     uint32_t n_monoms_declared = 0;
@@ -64,7 +74,7 @@ inline std::optional<Anf> load_anf_dimacs(const std::string& path) {
                 return std::nullopt;
             }
             have_header = true;
-            monomials.reserve(n_monoms_declared);
+            monomials.reserve(std::min<uint64_t>(n_monoms_declared, reserve_cap));
             continue;
         }
 
