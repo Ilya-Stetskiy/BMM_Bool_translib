@@ -34,7 +34,9 @@
 #include <bmm/core/common.hpp>
 #include "verify/sat_encoding/sat_encoding.hpp"
 
+#include <algorithm>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <optional>
 #include <sstream>
@@ -52,11 +54,24 @@ namespace bmm::benchmarks {
 // прогоном лёгкого CI (см. CHANGELOG.md). 100 млн — с большим запасом выше
 // реальных датасетов проекта (SATLIB — до ~50 тыс. инстансов, каждый на
 // порядки меньше по n_vars), но отсекает адверсариальные значения.
+//
+// САМ ЭТОТ ЛИМИТ НЕДОСТАТОЧЕН ДЛЯ reserve(): sizeof(CnfClause) == 24 байта
+// (std::vector<int> literals), поэтому n_clauses_declared у самой границы
+// kMaxReasonableCnfVars всё ещё даёт reserve() на ~2.4 ГБ из 20-байтного
+// заголовка ("p cnf 3 99999999") — найдено многочасовым ручным
+// фаззинг-прогоном (не CI-smoke, там 60с недостаточно), падает как
+// libFuzzer out-of-memory за секунды. Поэтому reserve() ниже ограничен ещё
+// и фактическим размером файла — атакующий не может форсировать аллокацию
+// больше, чем байт он сам передал.
 inline constexpr uint32_t kMaxReasonableCnfVars = 100'000'000;
 
 inline std::optional<verify::CnfFormula> load_cnf_dimacs(const std::string& path) {
     std::ifstream in(path);
     if (!in) return std::nullopt;
+
+    std::error_code fs_ec;
+    const uint64_t file_size = std::filesystem::file_size(path, fs_ec);
+    const uint64_t reserve_cap = fs_ec ? 0 : file_size;
 
     verify::CnfFormula cnf;
     bool have_header = false;
@@ -76,7 +91,7 @@ inline std::optional<verify::CnfFormula> load_cnf_dimacs(const std::string& path
                 return std::nullopt;
             }
             have_header = true;
-            cnf.clauses.reserve(n_clauses_declared);
+            cnf.clauses.reserve(std::min<uint64_t>(n_clauses_declared, reserve_cap));
             continue;
         }
 
